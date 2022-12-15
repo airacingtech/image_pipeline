@@ -51,7 +51,7 @@ ResizeNode::ResizeNode(const rclcpp::NodeOptions & options)
 : rclcpp::Node("ResizeNode", options)
 {
   // Create image pub
-  pub_image_ = image_transport::create_camera_publisher(this, "resize");
+  pub_image_ = image_transport::create_camera_publisher(this, "telemetry_img");
   // Create image sub
   sub_image_ = image_transport::create_camera_subscription(
     this, "image",
@@ -142,7 +142,7 @@ void ResizeNode::imageCb(
   dst_info_msg->roi.width = static_cast<int>(dst_info_msg->roi.width * scale_x);
   dst_info_msg->roi.height = static_cast<int>(dst_info_msg->roi.height * scale_y);
 
-  pub_image_.publish(*cv_ptr->toImageMsg(), *dst_info_msg);
+  pub_image_.publish(*cv_ptr->toImageMsg(), *info_msg);
 
   TRACEPOINT(
     image_proc_resize_fini,
