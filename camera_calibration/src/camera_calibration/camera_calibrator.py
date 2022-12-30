@@ -40,7 +40,7 @@ import sensor_msgs.msg
 import sensor_msgs.srv
 import threading
 import time
-from camera_calibration.calibrator import MonoCalibrator, StereoCalibrator, Patterns
+from camera_calibration.calibrator import MonoCalibrator, StereoCalibrator, Patterns, ChessboardInfo, CAMERA_MODEL
 try:
     from queue import Queue
 except ImportError:
