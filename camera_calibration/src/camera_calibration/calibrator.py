@@ -46,6 +46,9 @@ import tarfile
 import time
 from distutils.version import LooseVersion
 from enum import Enum
+from itertools import combinations
+import random
+
 
 # Supported camera models
 class CAMERA_MODEL(Enum):
@@ -238,7 +241,7 @@ def _get_corners(img, board, refine = True, checkerboard_flags=0):
             for col in range(board.n_cols):
                 index = row*board.n_rows + col
                 min_distance = min(min_distance, _pdist(corners[index, 0], corners[index + board.n_cols, 0]))
-        radius = int(math.ceil(min_distance * 0.5))
+        radius = int(math.ceil(min_distance * 0.1))
         cv2.cornerSubPix(mono, corners, (radius,radius), (-1,-1),
                                       ( cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.1 ))
 
@@ -429,7 +432,7 @@ class Calibrator():
         d = min([param_distance(params, p) for p in db_params])
         #print "d = %.3f" % d #DEBUG
         # TODO What's a good threshold here? Should it be configurable?
-        if d <= 0.2:
+        if d <= 1: # was 0.2
             return False
 
         if self.max_chessboard_speed > 0:
@@ -758,6 +761,7 @@ class MonoCalibrator(Calibrator):
         (ipts, ids, boards) = zip(*good)
         opts = self.mk_object_points(boards)
         # If FIX_ASPECT_RATIO flag set, enforce focal lengths have 1/1 ratio
+<<<<<<< HEAD
         intrinsics_in = numpy.eye(3, dtype=numpy.float64)
 
         if self.pattern == Patterns.ChArUco:
@@ -768,6 +772,11 @@ class MonoCalibrator(Calibrator):
                     ipts, ids, boards[0].charuco_board, self.size, intrinsics_in, None)
 
         elif self.camera_model == CAMERA_MODEL.PINHOLE:
+=======
+        intrinsics_in = numpy.zeros((3,3), dtype=numpy.float64)
+        D_in = numpy.zeros((4,1), dtype=numpy.float64)
+        if self.camera_model == CAMERA_MODEL.PINHOLE:
+>>>>>>> e06354f (improved fisheye calib, doesn't break under ill conditioned matrix)
             print("mono pinhole calibration...")
             reproj_err, self.intrinsics, dist_coeffs, rvecs, tvecs = cv2.calibrateCamera(
                     opts, ipts,
@@ -784,6 +793,7 @@ class MonoCalibrator(Calibrator):
         elif self.camera_model == CAMERA_MODEL.FISHEYE:
             print("mono fisheye calibration...")
             # WARNING: cv2.fisheye.calibrate wants float64 points
+<<<<<<< HEAD
             ipts64 = numpy.asarray(ipts, dtype=numpy.float64)
             ipts = ipts64
             opts64 = numpy.asarray(opts, dtype=numpy.float64)
@@ -791,6 +801,73 @@ class MonoCalibrator(Calibrator):
             reproj_err, self.intrinsics, self.distortion, rvecs, tvecs = cv2.fisheye.calibrate(
                 opts, ipts, self.size,
                 intrinsics_in, None, flags = self.fisheye_calib_flags)
+=======
+            reproj_err = 100  # temporary so we can check if we found a solution
+            idxs = numpy.arange(len(ipts))
+            num_pts = min(20, len(ipts))
+            # num_attempts = 0
+            while reproj_err > 1.0:
+                # if (num_pts < 5):
+                #     raise CalibrationException("Not enough points to calibrate")
+                
+                random.shuffle(idxs)
+                idxs_20 = idxs[:num_pts]
+                ipts64 = numpy.asarray([ipts[i] for i in idxs_20], dtype=numpy.float64)
+                opts64 = numpy.asarray([opts[i] for i in idxs_20], dtype=numpy.float64)
+                try:
+                    reproj_err, self.intrinsics, dist_coeffs, rvecs, tvecs = cv2.fisheye.calibrate(
+                            opts64, ipts64, self.size,
+                            intrinsics_in,
+                            D_in,
+                            flags = self.fisheye_calib_flags + cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC + cv2.fisheye.CALIB_CHECK_COND)
+                    self.distortion = dist_coeffs.flat[:4].reshape(-1, 1) # Kannala-Brandt
+                    print("calibrated with reprojection error: %f" % reproj_err)
+                except:
+                    print("matrix ill conditioned, trying again...")
+                # if num_points < 20:  
+                #     num_attempts += 1
+                # if (num_attempts > 50):
+                #     num_pts -= 1
+                #     num_attempts = 0
+                
+            
+            # # decaying subset size version
+            # MAX_SUBSETS = 500
+            # for num_points in range(len(ipts), 0, -1):  # avoid ill conditioned matrix
+            #     reproj_err = 100  # temporary so we can check if we found a solution
+            #     print("attempting to calibrate with %d points..." % num_points)
+            #     for subset_idx in list(combinations(range(len(ipts)), num_points))[:MAX_SUBSETS]:
+            #         ipts64 = numpy.asarray([ipts[i] for i in subset_idx], dtype=numpy.float64)
+            #         opts64 = numpy.asarray([opts[i] for i in subset_idx], dtype=numpy.float64)
+            #         try:
+            #             reproj_err, self.intrinsics, dist_coeffs, rvecs, tvecs = cv2.fisheye.calibrate(
+            #                     opts64, ipts64, self.size,
+            #                     intrinsics_in,
+            #                     D_in,
+            #                     flags = self.fisheye_calib_flags + cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC + cv2.fisheye.CALIB_CHECK_COND)
+            #             self.distortion = dist_coeffs.flat[:4].reshape(-1, 1) # Kannala-Brandt
+            #             if (reproj_err < 1.0):
+            #                 break
+
+            #         except:
+            #             pass
+            #     if(reproj_err < 1.0):
+            #         break
+            #     else:
+            #         print("failed to calibrate with %d points..." % num_points)
+                    
+            # # no retry version (original)
+            # ipts64 = numpy.asarray(ipts, dtype=numpy.float64)
+            # ipts = ipts64
+            # opts64 = numpy.asarray(opts, dtype=numpy.float64)
+            # opts = opts64
+            # reproj_err, self.intrinsics, dist_coeffs, rvecs, tvecs = cv2.fisheye.calibrate(
+            #         opts, ipts, self.size,
+            #         intrinsics_in,
+            #         D_in,
+            #         flags = self.fisheye_calib_flags + cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC + cv2.fisheye.CALIB_CHECK_COND) 
+            # self.distortion = dist_coeffs.flat[:4].reshape(-1, 1) # Kannala-Brandt
+>>>>>>> e06354f (improved fisheye calib, doesn't break under ill conditioned matrix)
 
         # R is identity matrix for monocular calibration
         self.R = numpy.eye(3, dtype=numpy.float64)
