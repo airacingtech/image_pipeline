@@ -341,7 +341,7 @@ class Calibrator():
         d = min([param_distance(params, p) for p in db_params])
         #print "d = %.3f" % d #DEBUG
         # TODO What's a good threshold here? Should it be configurable?
-        if d <= 1: # was 0.2
+        if d <= 0.3: # was 0.2
             return False
 
         if self.max_chessboard_speed > 0:
