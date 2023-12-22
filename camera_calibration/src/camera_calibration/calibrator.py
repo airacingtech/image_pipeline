@@ -31,7 +31,7 @@
 # LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
 # ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
-
+from ament_index_python import get_package_share_directory
 from io import BytesIO
 import cv2
 import cv_bridge
@@ -48,6 +48,8 @@ from distutils.version import LooseVersion
 from enum import Enum
 from itertools import combinations
 import random
+import yaml
+import datetime
 
 
 # Supported camera models
@@ -309,7 +311,7 @@ class Calibrator():
     Base class for calibration system
     """
     def __init__(self, boards, flags=0, fisheye_flags = 0, pattern=Patterns.Chessboard, name='',
-            checkerboard_flags=cv2.CALIB_CB_FAST_CHECK, max_chessboard_speed = -1.0):
+            checkerboard_flags=cv2.CALIB_CB_FAST_CHECK, max_chessboard_speed = -1.0, camera_name=''):
         # Ordering the dimensions for the different detectors is actually a minefield...
         if pattern == Patterns.Chessboard:
             # Make sure n_cols > n_rows to agree with OpenCV CB detector output
@@ -344,6 +346,7 @@ class Calibrator():
         self.last_frame_corners = None
         self.last_frame_ids = None
         self.max_chessboard_speed = max_chessboard_speed
+        self.camera_name = camera_name
 
     def mkgray(self, msg):
         """
@@ -462,7 +465,7 @@ class Calibrator():
         progress = [min((hi - lo) / r, 1.0) for (lo, hi, r) in zip(min_params, max_params, self.param_ranges)]
         # If we have lots of samples, allow calibration even if not all parameters are green
         # TODO Awkward that we update self.goodenough instead of returning it
-        self.goodenough = (len(self.db) >= 40) or all([p == 1.0 for p in progress])
+        self.goodenough = (len(self.db) >= 20) or all([p == 0.8 for p in progress])
 
         return list(zip(self._param_names, min_params, max_params, progress))
 
@@ -670,11 +673,89 @@ class Calibrator():
         return calmessage
 
     def do_save(self):
-        filename = '/tmp/calibrationdata.tar.gz'
-        tf = tarfile.open(filename, 'w:gz')
-        self.do_tarfile_save(tf) # Must be overridden in subclasses
-        tf.close()
-        print(("Wrote calibration data to", filename))
+        results_path = "/home/art-berk/race_common/src/perception/params/camera_params/"
+        timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        file_name = f"{self.camera_name}_{timestamp_str}.yaml"
+        self.write_yaml(path=results_path + file_name)
+        return 
+
+    def do_commit(self):
+        # write calibration result to launch params and lidar-camera param
+        # 1. overwrite launch params.
+        launch_param_dir = "/home/art-berk/race_common/src/launch/iac_launch/param/cameras_param/"
+        launch_param_name = f"cam_{self.camera_name[6:]}_calib.yaml"
+        launch_param_path = launch_param_dir + launch_param_name
+        launch_params = {}
+        with open(launch_param_path, 'r') as file:
+            print(f"reading previous params from {launch_param_path}")
+            try:
+                launch_params = yaml.safe_load(file)
+                print("laucnhing params loaded")
+            except yaml.YAMLError as exc:
+                print("no previous params file found. ")
+        self.write_yaml(launch_param_path[:-5] + "_testing.yaml", launch_params)
+        print(f"Done with overwriting launch params for {launch_param_name}")
+        
+        # 2. overwrite lidar_camera_projection param
+        liadar_cam_param_path = "/home/art-berk/race_common/src/perception/IAC_Perception/src/lidar_camera_calib/pt_selection_pkg/param/pt_selection_pnp.param.yaml"
+        lidar_cam_params = {"/**": {"ros__parameters": {}}}
+        with open(liadar_cam_param_path, 'r') as file:
+            try:
+                lidar_cam_params = yaml.safe_load(file)
+            except yaml.YAMLError as exc:
+                print("no previous lidar_cam params file found. Exit")
+                return 
+        
+        lidar_cam_params["/**"]["ros__parameters"]["topics"]["img_selection"] = f"/{self.camera_name}/image"
+        lidar_cam_params["/**"]["ros__parameters"]["matrices"]["old_k"] =  self.intrinsics.reshape(-1).tolist()
+        lidar_cam_params["/**"]["ros__parameters"]["matrices"]["distortion"] = self.distortion.reshape(-1).tolist() 
+        print(lidar_cam_params["/**"]["ros__parameters"])
+        with open(liadar_cam_param_path[:-5]+"_testing.yaml", 'w') as file:
+            # try:
+            lidar_cam_params = yaml.safe_dump(lidar_cam_params, file, default_flow_style=None)
+            # except yaml.YAMLError as exc:
+            #     print("writing failed", exc)
+            #     return 
+
+    
+        return 
+    
+    def write_yaml(self, path, calibration_result = {}):
+        print("Generating Yaml File")
+
+        print(self.intrinsics)
+        print(type(self.intrinsics))
+        print(self.intrinsics.shape)
+        print(type(self.intrinsics.reshape(-1).tolist()))
+        calibration_result["image_width"] = self.size[0]
+        calibration_result["image_height"] = self.size[1]
+        calibration_result["camera_name"] = self.name
+        calibration_result["distortion_model"] = "" # TODO: Find calibration Model
+        calibration_result["camera_matrix"] = {
+            "rows": self.intrinsics.shape[0],
+            "cols": self.intrinsics.shape[1],
+            "data": self.intrinsics.reshape(-1).tolist()
+        }
+        calibration_result["distortion"] = {
+            "rows": self.distortion.shape[0],
+            "cols": self.distortion.shape[1],
+            "data": self.distortion.reshape(-1).tolist()
+        }
+        calibration_result["rectification"] = {
+            "rows": self.R.shape[0],
+            "cols": self.R.shape[1],
+            "data": self.R.reshape(-1).tolist()
+        }
+        calibration_result["projection"] = {
+            "rows": self.P.shape[0],
+            "cols": self.P.shape[1],
+            "data": self.P.reshape(-1).tolist()
+        }
+        with open(path, 'w') as yaml_file:
+            yaml.safe_dump(calibration_result, yaml_file, default_flow_style=None)
+        print(f"Yaml file written to {path}")
+
+
 
 def image_from_archive(archive, name):
     """
@@ -726,6 +807,8 @@ class MonoCalibrator(Calibrator):
         if 'name' not in kwargs:
             kwargs['name'] = 'narrow_stereo/left'
         super(MonoCalibrator, self).__init__(*args, **kwargs)
+
+        print(f"using mono model from {self.camera_name}")
 
     def cal(self, images):
         """
