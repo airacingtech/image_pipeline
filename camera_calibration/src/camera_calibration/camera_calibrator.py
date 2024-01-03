@@ -97,12 +97,12 @@ class CalibrationNode(Node):
                  max_chessboard_speed = -1, queue_size = 1):
         super().__init__(name)
 
-<<<<<<< HEAD
-        self.set_camera_info_service = self.create_client(sensor_msgs.srv.SetCameraInfo, "camera/set_camera_info")
-        self.set_left_camera_info_service = self.create_client(sensor_msgs.srv.SetCameraInfo, "left_camera/set_camera_info")
-        self.set_right_camera_info_service = self.create_client(sensor_msgs.srv.SetCameraInfo, "right_camera/set_camera_info")
+# <<<<<<< HEAD
+#         self.set_camera_info_service = self.create_client(sensor_msgs.srv.SetCameraInfo, "camera/set_camera_info")
+#         self.set_left_camera_info_service = self.create_client(sensor_msgs.srv.SetCameraInfo, "left_camera/set_camera_info")
+#         self.set_right_camera_info_service = self.create_client(sensor_msgs.srv.SetCameraInfo, "right_camera/set_camera_info")
 
-=======
+# =======
         left_camera = self.declare_parameter("left_camera", "left_camera").get_parameter_value().string_value
         right_camera = self.declare_parameter("right_camera", "right_camera").get_parameter_value().string_value
         camera = self.declare_parameter("camera", "camera").get_parameter_value().string_value
@@ -110,7 +110,7 @@ class CalibrationNode(Node):
         self.set_camera_info_service = self.create_client(sensor_msgs.srv.SetCameraInfo, camera + "/set_camera_info")
         self.set_left_camera_info_service = self.create_client(sensor_msgs.srv.SetCameraInfo, left_camera + "/set_camera_info")
         self.set_right_camera_info_service = self.create_client(sensor_msgs.srv.SetCameraInfo, right_camera + "/set_camera_info")
->>>>>>> a200728 (calibration pipeline in progree)
+# >>>>>>> a200728 (calibration pipeline in progree)
         if service_check:
             available = False
             # assume any non-default service names have been set.  Wait for the service to become ready
@@ -236,8 +236,6 @@ class CalibrationNode(Node):
             rv = rv and self.check_set_camera_info(response)
         return rv
 
-<<<<<<< HEAD
-=======
     def get_topic_resource(self, topic_name: str) -> str:
         topic_name = self.resolve_topic_name(topic_name)
         topic_info = self.get_publishers_info_by_topic(topic_name=topic_name)
@@ -247,8 +245,6 @@ class CalibrationNode(Node):
             self.get_logger().warn(f"No publishers available for topic {topic_name}. Using system default QoS for subscriber.")
             return qos_profile_system_default
 
-
->>>>>>> a200728 (calibration pipeline in progree)
     def get_topic_qos(self, topic_name: str) -> QoSProfile:
         """!
         Given a topic name, get the QoS profile with which it is being published.
@@ -330,17 +326,12 @@ class OpenCVCalibrationNode(CalibrationNode):
                     self.c.do_commit()
                     return 
                     # Only shut down if we set camera info correctly, #3993
-<<<<<<< HEAD
-                    if self.do_upload():
-                        rclpy.shutdown()
-=======
                     # "**** Commiting ****"
                     # if self.do_upload():
                     #     rclpy.shutdown()
                 else:
                     "no response for this ------------------------"
-
->>>>>>> a200728 (calibration pipeline in progree)
+                    
     def on_model_change(self, model_select_val):
         if self.c == None:
             print("Cannot change camera model until the first image has been received")

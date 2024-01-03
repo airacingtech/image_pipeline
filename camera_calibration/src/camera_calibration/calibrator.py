@@ -465,7 +465,7 @@ class Calibrator():
         progress = [min((hi - lo) / r, 1.0) for (lo, hi, r) in zip(min_params, max_params, self.param_ranges)]
         # If we have lots of samples, allow calibration even if not all parameters are green
         # TODO Awkward that we update self.goodenough instead of returning it
-        self.goodenough = (len(self.db) >= 40) or all([p == 1.0 for p in progress])
+        self.goodenough = (len(self.db) >= 10) or all([p == 0.5 for p in progress])
 
         return list(zip(self._param_names, min_params, max_params, progress))
 
@@ -673,7 +673,7 @@ class Calibrator():
         return calmessage
 
     def do_save(self):
-        results_path = "/home/art-berk/race_common/src/perception/params/camera_params/"
+        results_path = "./src/perception/params/camera_params/"
         timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         file_name = f"{self.camera_name}_{timestamp_str}.yaml"
         self.write_yaml(path=results_path + file_name)
@@ -682,7 +682,7 @@ class Calibrator():
     def do_commit(self):
         # write calibration result to launch params and lidar-camera param
         # 1. overwrite launch params.
-        launch_param_dir = "/home/art-berk/race_common/src/launch/iac_launch/param/cameras_param/"
+        launch_param_dir = "./src/launch/iac_launch/param/cameras_param/"
         launch_param_name = f"cam_{self.camera_name[6:]}_calib.yaml"
         launch_param_path = launch_param_dir + launch_param_name
         launch_params = {}
@@ -697,7 +697,7 @@ class Calibrator():
         print(f"Done with overwriting launch params for {launch_param_name}")
         
         # 2. overwrite lidar_camera_projection param
-        liadar_cam_param_path = "/home/art-berk/race_common/src/perception/IAC_Perception/src/lidar_camera_calib/pt_selection_pkg/param/pt_selection_pnp.param.yaml"
+        liadar_cam_param_path = "./src/external/IAC_Perception/src/lidar_camera_calib/pt_selection_pkg/param/pt_selection_pnp.param.yaml"
         lidar_cam_params = {"/**": {"ros__parameters": {}}}
         with open(liadar_cam_param_path, 'r') as file:
             try:
@@ -710,13 +710,14 @@ class Calibrator():
         lidar_cam_params["/**"]["ros__parameters"]["matrices"]["old_k"] =  self.intrinsics.reshape(-1).tolist()
         lidar_cam_params["/**"]["ros__parameters"]["matrices"]["distortion"] = self.distortion.reshape(-1).tolist() 
         print(lidar_cam_params["/**"]["ros__parameters"])
-        with open(liadar_cam_param_path[:-5]+"_testing.yaml", 'w') as file:
+        lidar_cam_params_output_path = liadar_cam_param_path[:-5]+"_testing.yaml"
+        with open(lidar_cam_params_output_path, 'w') as file:
             # try:
-            lidar_cam_params = yaml.safe_dump(lidar_cam_params, file, default_flow_style=None)
             # except yaml.YAMLError as exc:
             #     print("writing failed", exc)
             #     return 
-
+            self.write_yaml(lidar_cam_params_output_path, lidar_cam_params)
+            print(f"Done with overwriting launch params for {lidar_cam_params_output_path}")
     
         return 
     
@@ -844,7 +845,7 @@ class MonoCalibrator(Calibrator):
         (ipts, ids, boards) = zip(*good)
         opts = self.mk_object_points(boards)
         # If FIX_ASPECT_RATIO flag set, enforce focal lengths have 1/1 ratio
-<<<<<<< HEAD
+# <<<<<<< HEAD
         intrinsics_in = numpy.eye(3, dtype=numpy.float64)
 
         if self.pattern == Patterns.ChArUco:
@@ -855,11 +856,11 @@ class MonoCalibrator(Calibrator):
                     ipts, ids, boards[0].charuco_board, self.size, intrinsics_in, None)
 
         elif self.camera_model == CAMERA_MODEL.PINHOLE:
-=======
-        intrinsics_in = numpy.zeros((3,3), dtype=numpy.float64)
-        D_in = numpy.zeros((4,1), dtype=numpy.float64)
-        if self.camera_model == CAMERA_MODEL.PINHOLE:
->>>>>>> e06354f (improved fisheye calib, doesn't break under ill conditioned matrix)
+# =======
+#         intrinsics_in = numpy.zeros((3,3), dtype=numpy.float64)
+#         D_in = numpy.zeros((4,1), dtype=numpy.float64)
+#         if self.camera_model == CAMERA_MODEL.PINHOLE:
+# >>>>>>> e06354f (improved fisheye calib, doesn't break under ill conditioned matrix)
             print("mono pinhole calibration...")
             reproj_err, self.intrinsics, dist_coeffs, rvecs, tvecs = cv2.calibrateCamera(
                     opts, ipts,
@@ -876,15 +877,15 @@ class MonoCalibrator(Calibrator):
         elif self.camera_model == CAMERA_MODEL.FISHEYE:
             print("mono fisheye calibration...")
             # WARNING: cv2.fisheye.calibrate wants float64 points
-<<<<<<< HEAD
-            ipts64 = numpy.asarray(ipts, dtype=numpy.float64)
-            ipts = ipts64
-            opts64 = numpy.asarray(opts, dtype=numpy.float64)
-            opts = opts64
-            reproj_err, self.intrinsics, self.distortion, rvecs, tvecs = cv2.fisheye.calibrate(
-                opts, ipts, self.size,
-                intrinsics_in, None, flags = self.fisheye_calib_flags)
-=======
+# <<<<<<< HEAD
+#             ipts64 = numpy.asarray(ipts, dtype=numpy.float64)
+#             ipts = ipts64
+#             opts64 = numpy.asarray(opts, dtype=numpy.float64)
+#             opts = opts64
+#             reproj_err, self.intrinsics, self.distortion, rvecs, tvecs = cv2.fisheye.calibrate(
+#                 opts, ipts, self.size,
+#                 intrinsics_in, None, flags = self.fisheye_calib_flags)
+# =======
             reproj_err = 100  # temporary so we can check if we found a solution
             idxs = numpy.arange(len(ipts))
             num_pts = min(20, len(ipts))
@@ -950,7 +951,7 @@ class MonoCalibrator(Calibrator):
             #         D_in,
             #         flags = self.fisheye_calib_flags + cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC + cv2.fisheye.CALIB_CHECK_COND) 
             # self.distortion = dist_coeffs.flat[:4].reshape(-1, 1) # Kannala-Brandt
->>>>>>> e06354f (improved fisheye calib, doesn't break under ill conditioned matrix)
+# >>>>>>> e06354f (improved fisheye calib, doesn't break under ill conditioned matrix)
 
         # R is identity matrix for monocular calibration
         self.R = numpy.eye(3, dtype=numpy.float64)
