@@ -465,7 +465,7 @@ class Calibrator():
         progress = [min((hi - lo) / r, 1.0) for (lo, hi, r) in zip(min_params, max_params, self.param_ranges)]
         # If we have lots of samples, allow calibration even if not all parameters are green
         # TODO Awkward that we update self.goodenough instead of returning it
-        self.goodenough = (len(self.db) >= 10) or all([p == 0.5 for p in progress])
+        self.goodenough = (len(self.db) >= 40) or all([p == 0.9 for p in progress])
 
         return list(zip(self._param_names, min_params, max_params, progress))
 
@@ -682,8 +682,8 @@ class Calibrator():
     def do_commit(self):
         # write calibration result to launch params and lidar-camera param
         # 1. overwrite launch params.
-        launch_param_dir = "./src/launch/iac_launch/param/cameras_param/"
-        launch_param_name = f"cam_{self.camera_name[6:]}_calib.yaml"
+        launch_param_dir = "./src/launch/iac_launch/param/cameras_param/" # Camera Driver Param File
+        launch_param_name = f"cam_{self.camera_name[6:]}_calib.yaml"      
         launch_param_path = launch_param_dir + launch_param_name
         launch_params = {}
         with open(launch_param_path, 'r') as file:
@@ -697,7 +697,7 @@ class Calibrator():
         print(f"Done with overwriting launch params for {launch_param_name}")
         
         # 2. overwrite lidar_camera_projection param
-        liadar_cam_param_path = "./src/external/IAC_Perception/src/lidar_camera_calib/pt_selection_pkg/param/pt_selection_pnp.param.yaml"
+        liadar_cam_param_path = "./src/external/IAC_Perception/src/lidar_camera_calib/pt_selection_pkg/param/pt_selection_pnp.param.yaml" # Lidar-Camera Calibration Param File
         lidar_cam_params = {"/**": {"ros__parameters": {}}}
         with open(liadar_cam_param_path, 'r') as file:
             try:
