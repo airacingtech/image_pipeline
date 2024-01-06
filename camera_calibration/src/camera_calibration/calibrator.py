@@ -465,7 +465,7 @@ class Calibrator():
         progress = [min((hi - lo) / r, 1.0) for (lo, hi, r) in zip(min_params, max_params, self.param_ranges)]
         # If we have lots of samples, allow calibration even if not all parameters are green
         # TODO Awkward that we update self.goodenough instead of returning it
-        self.goodenough = (len(self.db) >= 40) or all([p == 0.9 for p in progress])
+        self.goodenough = (len(self.db) >= 20) or all([p == 0.5 for p in progress])
 
         return list(zip(self._param_names, min_params, max_params, progress))
 
@@ -693,31 +693,31 @@ class Calibrator():
                 print("laucnhing params loaded")
             except yaml.YAMLError as exc:
                 print("no previous params file found. ")
-        self.write_yaml(launch_param_path[:-5] + "_testing.yaml", launch_params)
+        self.write_yaml(launch_param_path, launch_params)
         print(f"Done with overwriting launch params for {launch_param_name}")
         
         # 2. overwrite lidar_camera_projection param
-        liadar_cam_param_path = "./src/external/IAC_Perception/src/lidar_camera_calib/pt_selection_pkg/param/pt_selection_pnp.param.yaml" # Lidar-Camera Calibration Param File
-        lidar_cam_params = {"/**": {"ros__parameters": {}}}
-        with open(liadar_cam_param_path, 'r') as file:
-            try:
-                lidar_cam_params = yaml.safe_load(file)
-            except yaml.YAMLError as exc:
-                print("no previous lidar_cam params file found. Exit")
-                return 
+        # liadar_cam_param_path = "./src/external/IAC_Perception/src/lidar_camera_calib/pt_selection_pkg/param/pt_selection_pnp.param.yaml" # Lidar-Camera Calibration Param File
+        # lidar_cam_params = {"/**": {"ros__parameters": {}}}
+        # with open(liadar_cam_param_path, 'r') as file:
+        #     try:
+        #         lidar_cam_params = yaml.safe_load(file)
+        #     except yaml.YAMLError as exc:
+        #         print("no previous lidar_cam params file found. Exit")
+        #         return 
         
-        lidar_cam_params["/**"]["ros__parameters"]["topics"]["img_selection"] = f"/{self.camera_name}/image"
-        lidar_cam_params["/**"]["ros__parameters"]["matrices"]["old_k"] =  self.intrinsics.reshape(-1).tolist()
-        lidar_cam_params["/**"]["ros__parameters"]["matrices"]["distortion"] = self.distortion.reshape(-1).tolist() 
-        print(lidar_cam_params["/**"]["ros__parameters"])
-        lidar_cam_params_output_path = liadar_cam_param_path[:-5]+"_testing.yaml"
-        with open(lidar_cam_params_output_path, 'w') as file:
-            # try:
-            # except yaml.YAMLError as exc:
-            #     print("writing failed", exc)
-            #     return 
-            self.write_yaml(lidar_cam_params_output_path, lidar_cam_params)
-            print(f"Done with overwriting launch params for {lidar_cam_params_output_path}")
+        # lidar_cam_params["/**"]["ros__parameters"]["topics"]["img_selection"] = f"/{self.camera_name}/image"
+        # lidar_cam_params["/**"]["ros__parameters"]["matrices"]["old_k"] =  self.intrinsics.reshape(-1).tolist()
+        # lidar_cam_params["/**"]["ros__parameters"]["matrices"]["distortion"] = self.distortion.reshape(-1).tolist() 
+        # print(lidar_cam_params["/**"]["ros__parameters"])
+        # lidar_cam_params_output_path = liadar_cam_param_path[:-5]+"_testing.yaml"
+        # with open(lidar_cam_params_output_path, 'w') as file:
+        #     # try:
+        #     # except yaml.YAMLError as exc:
+        #     #     print("writing failed", exc)
+        #     #     return 
+        #     self.write_yaml(lidar_cam_params_output_path, lidar_cam_params)
+        #     print(f"Done with overwriting launch params for {lidar_cam_params_output_path}")
     
         return 
     
