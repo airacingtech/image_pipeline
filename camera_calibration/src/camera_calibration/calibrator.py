@@ -465,7 +465,7 @@ class Calibrator():
         progress = [min((hi - lo) / r, 1.0) for (lo, hi, r) in zip(min_params, max_params, self.param_ranges)]
         # If we have lots of samples, allow calibration even if not all parameters are green
         # TODO Awkward that we update self.goodenough instead of returning it
-        self.goodenough = (len(self.db) >= 20) or all([p == 0.5 for p in progress])
+        self.goodenough = (len(self.db) >= 20) or all([p == 0.3 for p in progress])
 
         return list(zip(self._param_names, min_params, max_params, progress))
 
@@ -673,7 +673,7 @@ class Calibrator():
         return calmessage
 
     def do_save(self):
-        results_path = "./src/perception/params/camera_params/"
+        results_path = "./src/external/interfaces/image_pipeline/camera_calibration/results/"
         timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         file_name = f"{self.camera_name}_{timestamp_str}.yaml"
         self.write_yaml(path=results_path + file_name)
