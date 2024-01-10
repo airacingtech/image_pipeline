@@ -71,6 +71,7 @@ class ChessboardInfo():
         self.n_cols = n_cols
         self.n_rows = n_rows
         self.dim = dim
+        print(f"setting up chessboard info: {self.dim}")
         self.marker_size = marker_size
         self.aruco_dict = None
         self.charuco_board = None;
@@ -465,11 +466,13 @@ class Calibrator():
         progress = [min((hi - lo) / r, 1.0) for (lo, hi, r) in zip(min_params, max_params, self.param_ranges)]
         # If we have lots of samples, allow calibration even if not all parameters are green
         # TODO Awkward that we update self.goodenough instead of returning it
-        self.goodenough = (len(self.db) >= 20) or all([p == 0.3 for p in progress])
+        self.goodenough = (len(self.db) >= 5) or all([p == 0.1 for p in progress])
 
         return list(zip(self._param_names, min_params, max_params, progress))
 
     def mk_object_points(self, boards, use_board_size = False):
+        print(f"{use_board_size=}")
+        # print(f"slef.pattern:\n {self.pattern}")
         opts = []
         for i, b in enumerate(boards):
             num_pts = b.n_cols * b.n_rows
@@ -484,6 +487,7 @@ class Calibrator():
                 if use_board_size:
                     opts_loc[j, 0, :] = opts_loc[j, 0, :] * b.dim
             opts.append(opts_loc)
+        # print(f"opt:\n {opts}")
         return opts
 
     def get_corners(self, img, refine = True):
@@ -843,7 +847,7 @@ class MonoCalibrator(Calibrator):
         """
 
         (ipts, ids, boards) = zip(*good)
-        opts = self.mk_object_points(boards)
+        opts = self.mk_object_points(boards, True)
         # If FIX_ASPECT_RATIO flag set, enforce focal lengths have 1/1 ratio
 # <<<<<<< HEAD
         intrinsics_in = numpy.eye(3, dtype=numpy.float64)
@@ -862,6 +866,16 @@ class MonoCalibrator(Calibrator):
 #         if self.camera_model == CAMERA_MODEL.PINHOLE:
 # >>>>>>> e06354f (improved fisheye calib, doesn't break under ill conditioned matrix)
             print("mono pinhole calibration...")
+            # print()
+            # print("opts:", opts)
+            # print()
+            # print("ipts:", ipts)
+            # print()
+            # print("size:", self.size)
+            # print()
+            # print("intrinsics_in: ", intrinsics_in)
+            # print()
+            # print("flags:", self.calib_flags)
             reproj_err, self.intrinsics, dist_coeffs, rvecs, tvecs = cv2.calibrateCamera(
                     opts, ipts,
                     self.size,
@@ -1164,6 +1178,8 @@ class MonoCalibrator(Calibrator):
             images = [i for (p, i) in self.db]
             self.good_corners = self.collect_corners(images)
         self.size = (self.db[0][1].shape[1], self.db[0][1].shape[0]) # TODO Needs to be set externally
+        print(f"self.size: {self.size}")
+        print(f"{dump=}")
         # Dump should only occur if user wants it
         if dump:
             pickle.dump((self.is_mono, self.size, self.good_corners),
