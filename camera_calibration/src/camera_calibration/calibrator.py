@@ -31,7 +31,7 @@
 # LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
 # ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
-
+from ament_index_python import get_package_share_directory
 from io import BytesIO
 import cv2
 import cv_bridge
@@ -46,6 +46,11 @@ import tarfile
 import time
 from distutils.version import LooseVersion
 from enum import Enum
+from itertools import combinations
+import random
+import yaml
+import datetime
+
 
 # Supported camera models
 class CAMERA_MODEL(Enum):
@@ -238,7 +243,7 @@ def _get_corners(img, board, refine = True, checkerboard_flags=0):
             for col in range(board.n_cols):
                 index = row*board.n_rows + col
                 min_distance = min(min_distance, _pdist(corners[index, 0], corners[index + board.n_cols, 0]))
-        radius = int(math.ceil(min_distance * 0.5))
+        radius = int(math.ceil(min_distance * 0.1))
         cv2.cornerSubPix(mono, corners, (radius,radius), (-1,-1),
                                       ( cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.1 ))
 
@@ -306,7 +311,7 @@ class Calibrator():
     Base class for calibration system
     """
     def __init__(self, boards, flags=0, fisheye_flags = 0, pattern=Patterns.Chessboard, name='',
-            checkerboard_flags=cv2.CALIB_CB_FAST_CHECK, max_chessboard_speed = -1.0):
+            checkerboard_flags=cv2.CALIB_CB_FAST_CHECK, max_chessboard_speed = -1.0, camera_name=''):
         # Ordering the dimensions for the different detectors is actually a minefield...
         if pattern == Patterns.Chessboard:
             # Make sure n_cols > n_rows to agree with OpenCV CB detector output
@@ -341,6 +346,7 @@ class Calibrator():
         self.last_frame_corners = None
         self.last_frame_ids = None
         self.max_chessboard_speed = max_chessboard_speed
+        self.camera_name = camera_name
 
     def mkgray(self, msg):
         """
@@ -429,7 +435,7 @@ class Calibrator():
         d = min([param_distance(params, p) for p in db_params])
         #print "d = %.3f" % d #DEBUG
         # TODO What's a good threshold here? Should it be configurable?
-        if d <= 0.2:
+        if d <= 0.3: # was 0.2
             return False
 
         if self.max_chessboard_speed > 0:
@@ -459,7 +465,7 @@ class Calibrator():
         progress = [min((hi - lo) / r, 1.0) for (lo, hi, r) in zip(min_params, max_params, self.param_ranges)]
         # If we have lots of samples, allow calibration even if not all parameters are green
         # TODO Awkward that we update self.goodenough instead of returning it
-        self.goodenough = (len(self.db) >= 40) or all([p == 1.0 for p in progress])
+        self.goodenough = (len(self.db) >= 20) or all([p == 0.3 for p in progress])
 
         return list(zip(self._param_names, min_params, max_params, progress))
 
@@ -667,11 +673,90 @@ class Calibrator():
         return calmessage
 
     def do_save(self):
-        filename = '/tmp/calibrationdata.tar.gz'
-        tf = tarfile.open(filename, 'w:gz')
-        self.do_tarfile_save(tf) # Must be overridden in subclasses
-        tf.close()
-        print(("Wrote calibration data to", filename))
+        results_path = "./src/external/interfaces/image_pipeline/camera_calibration/results/"
+        timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        file_name = f"{self.camera_name}_{timestamp_str}.yaml"
+        self.write_yaml(path=results_path + file_name)
+        return 
+
+    def do_commit(self):
+        # write calibration result to launch params and lidar-camera param
+        # 1. overwrite launch params.
+        launch_param_dir = "./src/launch/iac_launch/param/cameras_param/" # Camera Driver Param File
+        launch_param_name = f"cam_{self.camera_name[6:]}_calib.yaml"      
+        launch_param_path = launch_param_dir + launch_param_name
+        launch_params = {}
+        with open(launch_param_path, 'r') as file:
+            print(f"reading previous params from {launch_param_path}")
+            try:
+                launch_params = yaml.safe_load(file)
+                print("laucnhing params loaded")
+            except yaml.YAMLError as exc:
+                print("no previous params file found. ")
+        self.write_yaml(launch_param_path, launch_params)
+        print(f"Done with overwriting launch params for {launch_param_name}")
+        
+        # 2. overwrite lidar_camera_projection param
+        # liadar_cam_param_path = "./src/external/IAC_Perception/src/lidar_camera_calib/pt_selection_pkg/param/pt_selection_pnp.param.yaml" # Lidar-Camera Calibration Param File
+        # lidar_cam_params = {"/**": {"ros__parameters": {}}}
+        # with open(liadar_cam_param_path, 'r') as file:
+        #     try:
+        #         lidar_cam_params = yaml.safe_load(file)
+        #     except yaml.YAMLError as exc:
+        #         print("no previous lidar_cam params file found. Exit")
+        #         return 
+        
+        # lidar_cam_params["/**"]["ros__parameters"]["topics"]["img_selection"] = f"/{self.camera_name}/image"
+        # lidar_cam_params["/**"]["ros__parameters"]["matrices"]["old_k"] =  self.intrinsics.reshape(-1).tolist()
+        # lidar_cam_params["/**"]["ros__parameters"]["matrices"]["distortion"] = self.distortion.reshape(-1).tolist() 
+        # print(lidar_cam_params["/**"]["ros__parameters"])
+        # lidar_cam_params_output_path = liadar_cam_param_path[:-5]+"_testing.yaml"
+        # with open(lidar_cam_params_output_path, 'w') as file:
+        #     # try:
+        #     # except yaml.YAMLError as exc:
+        #     #     print("writing failed", exc)
+        #     #     return 
+        #     self.write_yaml(lidar_cam_params_output_path, lidar_cam_params)
+        #     print(f"Done with overwriting launch params for {lidar_cam_params_output_path}")
+    
+        return 
+    
+    def write_yaml(self, path, calibration_result = {}):
+        print("Generating Yaml File")
+
+        print(self.intrinsics)
+        print(type(self.intrinsics))
+        print(self.intrinsics.shape)
+        print(type(self.intrinsics.reshape(-1).tolist()))
+        calibration_result["image_width"] = self.size[0]
+        calibration_result["image_height"] = self.size[1]
+        calibration_result["camera_name"] = self.name
+        calibration_result["distortion_model"] = "" # TODO: Find calibration Model
+        calibration_result["camera_matrix"] = {
+            "rows": self.intrinsics.shape[0],
+            "cols": self.intrinsics.shape[1],
+            "data": self.intrinsics.reshape(-1).tolist()
+        }
+        calibration_result["distortion"] = {
+            "rows": self.distortion.shape[0],
+            "cols": self.distortion.shape[1],
+            "data": self.distortion.reshape(-1).tolist()
+        }
+        calibration_result["rectification"] = {
+            "rows": self.R.shape[0],
+            "cols": self.R.shape[1],
+            "data": self.R.reshape(-1).tolist()
+        }
+        calibration_result["projection"] = {
+            "rows": self.P.shape[0],
+            "cols": self.P.shape[1],
+            "data": self.P.reshape(-1).tolist()
+        }
+        with open(path, 'w') as yaml_file:
+            yaml.safe_dump(calibration_result, yaml_file, default_flow_style=None)
+        print(f"Yaml file written to {path}")
+
+
 
 def image_from_archive(archive, name):
     """
@@ -724,6 +809,8 @@ class MonoCalibrator(Calibrator):
             kwargs['name'] = 'narrow_stereo/left'
         super(MonoCalibrator, self).__init__(*args, **kwargs)
 
+        print(f"using mono model from {self.camera_name}")
+
     def cal(self, images):
         """
         Calibrate camera from given images
@@ -758,6 +845,7 @@ class MonoCalibrator(Calibrator):
         (ipts, ids, boards) = zip(*good)
         opts = self.mk_object_points(boards)
         # If FIX_ASPECT_RATIO flag set, enforce focal lengths have 1/1 ratio
+# <<<<<<< HEAD
         intrinsics_in = numpy.eye(3, dtype=numpy.float64)
 
         if self.pattern == Patterns.ChArUco:
@@ -768,6 +856,11 @@ class MonoCalibrator(Calibrator):
                     ipts, ids, boards[0].charuco_board, self.size, intrinsics_in, None)
 
         elif self.camera_model == CAMERA_MODEL.PINHOLE:
+# =======
+#         intrinsics_in = numpy.zeros((3,3), dtype=numpy.float64)
+#         D_in = numpy.zeros((4,1), dtype=numpy.float64)
+#         if self.camera_model == CAMERA_MODEL.PINHOLE:
+# >>>>>>> e06354f (improved fisheye calib, doesn't break under ill conditioned matrix)
             print("mono pinhole calibration...")
             reproj_err, self.intrinsics, dist_coeffs, rvecs, tvecs = cv2.calibrateCamera(
                     opts, ipts,
@@ -784,13 +877,81 @@ class MonoCalibrator(Calibrator):
         elif self.camera_model == CAMERA_MODEL.FISHEYE:
             print("mono fisheye calibration...")
             # WARNING: cv2.fisheye.calibrate wants float64 points
-            ipts64 = numpy.asarray(ipts, dtype=numpy.float64)
-            ipts = ipts64
-            opts64 = numpy.asarray(opts, dtype=numpy.float64)
-            opts = opts64
-            reproj_err, self.intrinsics, self.distortion, rvecs, tvecs = cv2.fisheye.calibrate(
-                opts, ipts, self.size,
-                intrinsics_in, None, flags = self.fisheye_calib_flags)
+# <<<<<<< HEAD
+#             ipts64 = numpy.asarray(ipts, dtype=numpy.float64)
+#             ipts = ipts64
+#             opts64 = numpy.asarray(opts, dtype=numpy.float64)
+#             opts = opts64
+#             reproj_err, self.intrinsics, self.distortion, rvecs, tvecs = cv2.fisheye.calibrate(
+#                 opts, ipts, self.size,
+#                 intrinsics_in, None, flags = self.fisheye_calib_flags)
+# =======
+            reproj_err = 100  # temporary so we can check if we found a solution
+            idxs = numpy.arange(len(ipts))
+            num_pts = min(20, len(ipts))
+            # num_attempts = 0
+            while reproj_err > 1.0:
+                # if (num_pts < 5):
+                #     raise CalibrationException("Not enough points to calibrate")
+                
+                random.shuffle(idxs)
+                idxs_20 = idxs[:num_pts]
+                ipts64 = numpy.asarray([ipts[i] for i in idxs_20], dtype=numpy.float64)
+                opts64 = numpy.asarray([opts[i] for i in idxs_20], dtype=numpy.float64)
+                try:
+                    reproj_err, self.intrinsics, dist_coeffs, rvecs, tvecs = cv2.fisheye.calibrate(
+                            opts64, ipts64, self.size,
+                            intrinsics_in,
+                            D_in,
+                            flags = self.fisheye_calib_flags + cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC + cv2.fisheye.CALIB_CHECK_COND)
+                    self.distortion = dist_coeffs.flat[:4].reshape(-1, 1) # Kannala-Brandt
+                    print("calibrated with reprojection error: %f" % reproj_err)
+                except:
+                    print("matrix ill conditioned, trying again...")
+                # if num_points < 20:  
+                #     num_attempts += 1
+                # if (num_attempts > 50):
+                #     num_pts -= 1
+                #     num_attempts = 0
+                
+            
+            # # decaying subset size version
+            # MAX_SUBSETS = 500
+            # for num_points in range(len(ipts), 0, -1):  # avoid ill conditioned matrix
+            #     reproj_err = 100  # temporary so we can check if we found a solution
+            #     print("attempting to calibrate with %d points..." % num_points)
+            #     for subset_idx in list(combinations(range(len(ipts)), num_points))[:MAX_SUBSETS]:
+            #         ipts64 = numpy.asarray([ipts[i] for i in subset_idx], dtype=numpy.float64)
+            #         opts64 = numpy.asarray([opts[i] for i in subset_idx], dtype=numpy.float64)
+            #         try:
+            #             reproj_err, self.intrinsics, dist_coeffs, rvecs, tvecs = cv2.fisheye.calibrate(
+            #                     opts64, ipts64, self.size,
+            #                     intrinsics_in,
+            #                     D_in,
+            #                     flags = self.fisheye_calib_flags + cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC + cv2.fisheye.CALIB_CHECK_COND)
+            #             self.distortion = dist_coeffs.flat[:4].reshape(-1, 1) # Kannala-Brandt
+            #             if (reproj_err < 1.0):
+            #                 break
+
+            #         except:
+            #             pass
+            #     if(reproj_err < 1.0):
+            #         break
+            #     else:
+            #         print("failed to calibrate with %d points..." % num_points)
+                    
+            # # no retry version (original)
+            # ipts64 = numpy.asarray(ipts, dtype=numpy.float64)
+            # ipts = ipts64
+            # opts64 = numpy.asarray(opts, dtype=numpy.float64)
+            # opts = opts64
+            # reproj_err, self.intrinsics, dist_coeffs, rvecs, tvecs = cv2.fisheye.calibrate(
+            #         opts, ipts, self.size,
+            #         intrinsics_in,
+            #         D_in,
+            #         flags = self.fisheye_calib_flags + cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC + cv2.fisheye.CALIB_CHECK_COND) 
+            # self.distortion = dist_coeffs.flat[:4].reshape(-1, 1) # Kannala-Brandt
+# >>>>>>> e06354f (improved fisheye calib, doesn't break under ill conditioned matrix)
 
         # R is identity matrix for monocular calibration
         self.R = numpy.eye(3, dtype=numpy.float64)
