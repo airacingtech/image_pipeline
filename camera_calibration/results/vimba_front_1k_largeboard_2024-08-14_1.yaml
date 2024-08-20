@@ -4,20 +4,20 @@ camera_matrix:
     0.0, 0.0, 1.0]
   rows: 3
 camera_name: narrow_stereo
-distortion:
-  cols: 1
+distortion_coefficients:
+  cols: 5
   data: [-0.16268476521878636, 0.034303177764816645, -0.0001758458816946821, 0.00015309677939041294,
     0.0]
-  rows: 5
+  rows: 1
 distortion_model: ''
 image_height: 772
 image_width: 1032
-projection:
+projection_matrix:
   cols: 4
   data: [409.1050837061851, 0.0, 518.5571473520047, 0.0, 0.0, 442.16904058981896,
     384.0850092369654, 0.0, 0.0, 0.0, 1.0, 0.0]
   rows: 3
-rectification:
+rectification_matrix:
   cols: 3
   data: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
   rows: 3
