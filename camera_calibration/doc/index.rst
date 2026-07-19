@@ -27,6 +27,24 @@ chessboard with 108mm squares:
 
    ros2 run camera_calibration cameracalibrator --size 8x6 --square 0.108 image:=/my_camera/image camera:=/my_camera
 
+For a fisheye camera, select the model at startup so samples cannot
+accidentally be solved with the pinhole model:
+
+.. code-block:: bash
+
+   ros2 run camera_calibration cameracalibrator \
+     --camera-model fisheye \
+     --fisheye-recompute-extrinsics \
+     --fisheye-check-conditions \
+     --fisheye-fix-skew \
+     --size 8x6 --square 0.108 \
+     image:=/my_camera/image camera:=/my_camera
+
+The camera model is fixed for the lifetime of the process. Restart the
+calibrator with a different ``--camera-model`` value to change it. A failed
+condition-number check stops after one attempt and keeps the GUI available so
+you can collect more varied views before trying again.
+
 When you click on the **Save** button after a succesfull calibration,
 the data (calibration data and images used for calibration) will
 be written to ``/tmp/calibrationdata.tar.gz``.
@@ -62,6 +80,8 @@ To run the ``cameracalibrator`` node for a stereo camera:
                         image queue size (default 1, set to 0 for unlimited)
 
   Calibration Optimizer Options:
+    --camera-model=MODEL
+                        camera projection model: pinhole or fisheye
     --fix-principal-point
                         for pinhole, fix the principal point at the image
                         center

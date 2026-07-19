@@ -37,7 +37,7 @@ import functools
 import message_filters
 import rclpy
 from camera_calibration.camera_calibrator import OpenCVCalibrationNode
-from camera_calibration.calibrator import ChessboardInfo, Patterns
+from camera_calibration.calibrator import CAMERA_MODEL, ChessboardInfo, Patterns
 from message_filters import ApproximateTimeSynchronizer
 
 def optionsValidCharuco(options, parser):
@@ -97,6 +97,9 @@ def main():
                      help="image queue size (default %default, set to 0 for unlimited)")
     parser.add_option_group(group)
     group = OptionGroup(parser, "Calibration Optimizer Options")
+    group.add_option("--camera-model",
+                     type="choice", choices=["pinhole", "fisheye"], default="pinhole",
+                     help="camera projection model: pinhole or fisheye (default %default)")
     group.add_option("--fix-principal-point",
                      action="store_true", default=False,
                      help="for pinhole, fix the principal point at the image center")
@@ -110,8 +113,8 @@ def main():
                      type="int", default=2, metavar="NUM_COEFFS",
                      help="for pinhole, number of radial distortion coefficients to use (up to 6, default %default)")
 
-    group.add_option("--fisheye-recompute-extrinsicsts",
-                     action="store_true", default=False,
+    group.add_option("--fisheye-recompute-extrinsicsts", "--fisheye-recompute-extrinsics",
+                     action="store_true", dest="fisheye_recompute_extrinsicsts", default=False,
                      help="for fisheye, extrinsic will be recomputed after each iteration of intrinsic optimization")
     group.add_option("--fisheye-fix-skew",
                      action="store_true", default=False,
@@ -135,6 +138,9 @@ def main():
 
     parser.add_option_group(group)
     options, _ = parser.parse_args(rclpy.utilities.remove_ros_args())
+
+    if options.pattern == "charuco" and options.camera_model == "fisheye":
+        parser.error("Fisheye calibration with a ChArUco board is not supported")
 
     if (len(options.size) != len(options.square)):
         parser.error("Number of size and square inputs must be the same!")
@@ -222,7 +228,9 @@ def main():
     node = OpenCVCalibrationNode("cameracalibrator", boards, options.service_check, sync,
                                  calib_flags, fisheye_calib_flags, pattern, options.camera_name,
                                  checkerboard_flags=checkerboard_flags, max_chessboard_speed=options.max_chessboard_speed,
-                                 queue_size=options.queue_size)
+                                 queue_size=options.queue_size,
+                                 camera_model=(CAMERA_MODEL.FISHEYE if options.camera_model == "fisheye"
+                                               else CAMERA_MODEL.PINHOLE))
     node.spin()
     rclpy.shutdown()
 

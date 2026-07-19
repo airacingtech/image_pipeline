@@ -2,7 +2,7 @@ name: Basic Build Workflow
 
 on:
   push:
-    branches: [jazzy]
+    branches: [jazzy, art-jazzy]
   pull_request:
     types: [opened, reopened, synchronize]
 
@@ -30,6 +30,11 @@ jobs:
       run: |
         bash -c 'source /opt/ros/$ROS_DISTRO/setup.bash; \
         colcon build'
+    - name: Check Installed Camera Calibration Import
+      run: |
+        bash -c 'source /opt/ros/$ROS_DISTRO/setup.bash; \
+        source install/setup.bash; \
+        python3 -c "import camera_calibration.camera_calibrator as m; print(m.__file__); assert m.CAMERA_MODEL.FISHEYE.value == 1"'
     - name: Run Tests
       run: |
         bash -c 'source /opt/ros/$ROS_DISTRO/setup.bash; \

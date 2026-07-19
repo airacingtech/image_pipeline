@@ -40,12 +40,17 @@ import sensor_msgs.msg
 import sensor_msgs.srv
 import threading
 import time
-from camera_calibration.calibrator import MonoCalibrator, StereoCalibrator, Patterns
+from camera_calibration.calibrator import (
+    CalibrationException,
+    CAMERA_MODEL,
+    MonoCalibrator,
+    Patterns,
+    StereoCalibrator,
+)
 try:
     from queue import Queue
 except ImportError:
     from Queue import Queue
-from camera_calibration.calibrator import CAMERA_MODEL
 from rclpy.qos import qos_profile_system_default
 from rclpy.qos import QoSProfile
 
@@ -94,7 +99,8 @@ class ConsumerThread(threading.Thread):
 class CalibrationNode(Node):
     def __init__(self, name, boards, service_check = True, synchronizer = message_filters.TimeSynchronizer, flags = 0,
                  fisheye_flags = 0, pattern=Patterns.Chessboard, camera_name='', checkerboard_flags = 0,
-                 max_chessboard_speed = -1, queue_size = 1):
+                 max_chessboard_speed = -1, queue_size = 1,
+                 camera_model=CAMERA_MODEL.PINHOLE):
         super().__init__(name)
 
         self.set_camera_info_service = self.create_client(sensor_msgs.srv.SetCameraInfo, "camera/set_camera_info")
@@ -122,6 +128,7 @@ class CalibrationNode(Node):
         self._checkerboard_flags = checkerboard_flags
         self._pattern = pattern
         self._camera_name = camera_name
+        self._camera_model = camera_model
         self._max_chessboard_speed = max_chessboard_speed
         lsub = message_filters.Subscriber(self, sensor_msgs.msg.Image, 'left', qos_profile=self.get_topic_qos("left"))
         rsub = message_filters.Subscriber(self, sensor_msgs.msg.Image, 'right', qos_profile=self.get_topic_qos("right"))
@@ -167,6 +174,7 @@ class CalibrationNode(Node):
                 self.c = MonoCalibrator(self._boards, self._calib_flags, self._fisheye_calib_flags, self._pattern,
                                         checkerboard_flags=self._checkerboard_flags,
                                         max_chessboard_speed = self._max_chessboard_speed)
+            self.c.set_cammodel(self._camera_model)
 
         # This should just call the MonoCalibrator
         drawable = self.c.handle_msg(msg)
@@ -183,6 +191,7 @@ class CalibrationNode(Node):
                 self.c = StereoCalibrator(self._boards, self._calib_flags, self._fisheye_calib_flags, self._pattern,
                                           checkerboard_flags=self._checkerboard_flags,
                                           max_chessboard_speed = self._max_chessboard_speed)
+            self.c.set_cammodel(self._camera_model)
 
         drawable = self.c.handle_msg(msg)
         self.displaywidth = drawable.lscrib.shape[1] + drawable.rscrib.shape[1]
@@ -196,12 +205,15 @@ class CalibrationNode(Node):
         for i in range(10):
             print("!" * 80)
         print()
-        print("Attempt to set camera info failed: " + response.result() if response.result() is not None else "Not available")
+        print(f"Attempt to set camera info failed: {response.status_message}")
         print()
         for i in range(10):
             print("!" * 80)
         print()
-        self.get_logger().error('Unable to set camera info for calibration. Failure message: %s' % response.result() if response.result() is not None else "Not available")
+        self.get_logger().error(
+            "Unable to set camera info for calibration. "
+            f"Failure message: {response.status_message}"
+        )
         return False
 
     def do_upload(self):
@@ -255,6 +267,7 @@ class OpenCVCalibrationNode(CalibrationNode):
         CalibrationNode.__init__(self, *args, **kwargs)
 
         self.queue_display = BufferQueue(maxsize=1)
+        self._calibration_running = False
         self.initWindow()
 
     def spin(self):
@@ -276,7 +289,6 @@ class OpenCVCalibrationNode(CalibrationNode):
     def initWindow(self):
         cv2.namedWindow("display", cv2.WINDOW_NORMAL)
         cv2.setMouseCallback("display", self.on_mouse)
-        cv2.createTrackbar("Camera type: \n 0 : pinhole \n 1 : fisheye", "display", 0,1, self.on_model_change)
         cv2.createTrackbar("scale", "display", 0, 100, self.on_scale)
 
     @classmethod
@@ -293,7 +305,13 @@ class OpenCVCalibrationNode(CalibrationNode):
                 if 180 <= y < 280:
                     print("**** Calibrating ****")
                     # Perform calibration in another thread to prevent UI blocking
-                    threading.Thread(target=self.c.do_calibration, name="Calibration").start()
+                    if not self._calibration_running:
+                        self.c.calibrated = False
+                        self.c.reprojection_error = None
+                        self._calibration_running = True
+                        threading.Thread(
+                            target=self._run_calibration, name="Calibration"
+                        ).start()
                     self.buttons(self._last_display)
                     self.queue_display.put(self._last_display)
             if self.c.calibrated:
@@ -303,12 +321,14 @@ class OpenCVCalibrationNode(CalibrationNode):
                     # Only shut down if we set camera info correctly, #3993
                     if self.do_upload():
                         rclpy.shutdown()
-    def on_model_change(self, model_select_val):
-        if self.c == None:
-            print("Cannot change camera model until the first image has been received")
-            return
 
-        self.c.set_cammodel( CAMERA_MODEL.PINHOLE if model_select_val < 0.5 else CAMERA_MODEL.FISHEYE)
+    def _run_calibration(self):
+        try:
+            self.c.do_calibration()
+        except (CalibrationException, cv2.error) as exc:
+            self.get_logger().error("Calibration failed: %s" % exc)
+        finally:
+            self._calibration_running = False
 
     def on_scale(self, scalevalue):
         if self.c and self.c.calibrated:

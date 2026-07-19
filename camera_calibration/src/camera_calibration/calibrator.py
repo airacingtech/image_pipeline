@@ -60,6 +60,49 @@ class Patterns:
 class CalibrationException(Exception):
     pass
 
+
+def _calibrate_fisheye(object_points, image_points, size, intrinsics, flags):
+    """Run fisheye calibration once and preserve OpenCV's diagnostics."""
+    try:
+        result = cv2.fisheye.calibrate(
+            numpy.asarray(object_points, dtype=numpy.float64),
+            numpy.asarray(image_points, dtype=numpy.float64),
+            size,
+            intrinsics,
+            None,
+            flags=flags,
+        )
+    except cv2.error as exc:
+        raise CalibrationException(
+            "Fisheye calibration failed. Capture more varied, sharply focused "
+            "checkerboard views across the full image and retry. OpenCV reported: %s"
+            % exc
+        ) from exc
+
+    reprojection_error, solved_intrinsics, distortion, _, _ = result
+    solved_intrinsics = numpy.asarray(solved_intrinsics)
+    distortion = numpy.asarray(distortion)
+    valid = (
+        numpy.isfinite(reprojection_error)
+        and reprojection_error >= 0.0
+        and solved_intrinsics.shape == (3, 3)
+        and numpy.all(numpy.isfinite(solved_intrinsics))
+        and solved_intrinsics[0, 0] > 0.0
+        and solved_intrinsics[1, 1] > 0.0
+        and solved_intrinsics[2, 2] != 0.0
+        and distortion.size == 4
+        and numpy.all(numpy.isfinite(distortion))
+    )
+    if not valid:
+        raise CalibrationException(
+            "Fisheye calibration returned an invalid solution "
+            "(RMS=%s, K shape=%s, D size=%s)."
+            % (reprojection_error, solved_intrinsics.shape, distortion.size)
+        )
+
+    print("Fisheye RMS reprojection error: %.6f px" % reprojection_error)
+    return result
+
 # TODO: Make pattern per-board?
 class ChessboardInfo():
     def __init__(self, pattern="chessboard", n_cols = 0, n_rows = 0, dim = 0.0, marker_size = 0.0, aruco_dict = None):
@@ -349,6 +392,7 @@ class Calibrator():
 
         # Set to true after we perform calibration
         self.calibrated = False
+        self.reprojection_error = None
         self.calib_flags = flags
         self.fisheye_calib_flags = fisheye_flags
         self.checkerboard_flags = checkerboard_flags
@@ -792,7 +836,9 @@ class MonoCalibrator(Calibrator):
 
         if self.pattern == Patterns.ChArUco:
             if self.camera_model == CAMERA_MODEL.FISHEYE:
-                raise NotImplemented("Can't perform fisheye calibration with ChArUco board")
+                raise CalibrationException(
+                    "Fisheye calibration with a ChArUco board is not supported"
+                )
 
             reproj_err, self.intrinsics, self.distortion, rvecs, tvecs = cv2.aruco.calibrateCameraCharuco(
                     ipts, ids, boards[0].charuco_board, self.size, intrinsics_in, None)
@@ -814,13 +860,10 @@ class MonoCalibrator(Calibrator):
         elif self.camera_model == CAMERA_MODEL.FISHEYE:
             print("mono fisheye calibration...")
             # WARNING: cv2.fisheye.calibrate wants float64 points
-            ipts64 = numpy.asarray(ipts, dtype=numpy.float64)
-            ipts = ipts64
-            opts64 = numpy.asarray(opts, dtype=numpy.float64)
-            opts = opts64
-            reproj_err, self.intrinsics, self.distortion, rvecs, tvecs = cv2.fisheye.calibrate(
-                opts, ipts, self.size,
-                intrinsics_in, None, flags = self.fisheye_calib_flags)
+            reproj_err, self.intrinsics, self.distortion, rvecs, tvecs = _calibrate_fisheye(
+                opts, ipts, self.size, intrinsics_in, self.fisheye_calib_flags)
+
+        self.reprojection_error = float(reproj_err)
 
         # R is identity matrix for monocular calibration
         self.R = numpy.eye(3, dtype=numpy.float64)
