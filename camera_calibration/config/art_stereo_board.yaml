@@ -1,0 +1,9 @@
+# Verified from the physical target: 11 x 8 squares means 10 x 7 OpenCV inner corners.
+pattern: checkerboard
+columns: 10
+rows: 7
+square_size_m: 0.070
+
+# These fields are unused for a checkerboard.
+marker_size_m: null
+aruco_dictionary: DICT_5X5_100

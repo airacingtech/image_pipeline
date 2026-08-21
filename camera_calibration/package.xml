@@ -19,10 +19,14 @@
   <author>James Bowman</author>
   <author>Patrick Mihelich</author>
 
+  <depend>ament_index_python</depend>
   <depend>cv_bridge</depend>
   <depend>image_geometry</depend>
+  <depend>launch</depend>
+  <depend>launch_ros</depend>
   <depend>message_filters</depend>
   <depend>python3-opencv</depend>
+  <depend>python3-yaml</depend>
   <depend>rclpy</depend>
   <depend>std_srvs</depend>
   <depend>sensor_msgs</depend>

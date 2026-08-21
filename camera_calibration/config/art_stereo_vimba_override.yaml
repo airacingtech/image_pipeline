@@ -1,0 +1,36 @@
+/**:
+  ros__parameters:
+    # Calibration uses raw ROS Image topics and does not start encoders.
+    publish_compressed: false
+    use_measurement_time: true
+    ptp_offset: -37
+
+    # Both cameras receive the same GigE Vision Action Command.
+    feature/PtpMode: 'Slave'
+    feature/TriggerSelector: FrameStart
+    feature/TriggerMode: 'On'
+    feature/TriggerSource: 'Action0'
+    feature/TriggerActivation: RisingEdge
+    feature/TriggerDelayAbs: 0.0
+    feature/TriggerOverlap: 'Off'
+    feature/ActionDeviceKey: 1
+    feature/ActionGroupKey: 1
+    feature/ActionGroupMask: 1
+    feature/ActionSelector: 0
+    feature/GevActionEnable: true
+
+    # The calibration contract is the native 2064 x 1544 Bayer image at 10 Hz.
+    # These values override the legacy 516 x 384 IAC camera files only inside
+    # the dedicated calibration launch; the production files remain unchanged.
+    feature/Width: 2064
+    feature/Height: 1544
+    feature/OffsetX: 0
+    feature/OffsetY: 0
+    feature/DecimationHorizontal: 1
+    feature/DecimationVertical: 1
+    feature/BinningHorizontal: 1
+    feature/BinningVertical: 1
+    feature/AcquisitionFrameRateAbs: 10.0
+
+    # Preserve the vehicle's Bayer format, bandwidth, exposure, and gain
+    # settings. Add reviewed overrides only after checking lighting.

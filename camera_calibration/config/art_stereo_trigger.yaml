@@ -1,0 +1,8 @@
+/**:
+  ros__parameters:
+    destination_ip: '10.42.17.255'
+    trigger_src: 'timer'
+    timer_period: 0.1
+    action_device_key: 1
+    action_group_key: 1
+    action_group_mask: 1

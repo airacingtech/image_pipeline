@@ -1,0 +1,9 @@
+# Replace every required null with a measured value. Incomplete configs are rejected.
+pattern: checkerboard          # checkerboard or charuco
+columns: null                  # checkerboard: inner corners; charuco: squares
+rows: null                     # checkerboard: inner corners; charuco: squares
+square_size_m: null            # Distance between adjacent corners, in meters
+
+# Required only for pattern=charuco:
+marker_size_m: null
+aruco_dictionary: DICT_5X5_100

@@ -154,4 +154,5 @@ To run the command-line utility to check the calibration of a stereo camera:
    components
    tutorial_mono
    tutorial_stereo
+   tutorial_art_center_stereo
    api

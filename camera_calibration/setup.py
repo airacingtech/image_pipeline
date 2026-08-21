@@ -1,4 +1,7 @@
 #!/usr/bin/env python
+from glob import glob
+import os
+
 from setuptools import setup, find_packages
 
 PACKAGE_NAME = "camera_calibration"
@@ -8,9 +11,11 @@ setup(
     version='5.0.13',
     packages=["camera_calibration", "camera_calibration.nodes"],
     data_files=[
-    ('share/ament_index/resource_index/packages',
-      ['resource/' + PACKAGE_NAME]),
-    ('share/' + PACKAGE_NAME, ['package.xml']),
+        ('share/ament_index/resource_index/packages',
+         ['resource/' + PACKAGE_NAME]),
+        ('share/' + PACKAGE_NAME, ['package.xml']),
+        (os.path.join('share', PACKAGE_NAME, 'config'), glob('config/*')),
+        (os.path.join('share', PACKAGE_NAME, 'launch'), glob('launch/*.launch.py')),
     ],
     py_modules=[],
     package_dir={'': 'src'},
@@ -33,6 +38,9 @@ setup(
             'cameracalibrator = camera_calibration.nodes.cameracalibrator:main',
             'cameracheck = camera_calibration.nodes.cameracheck:main',
             'tarfile_calibration = camera_calibration.nodes.tarfile_calibration:main',
+            'art_stereo_capture = camera_calibration.nodes.art_stereo_capture:main',
+            'art_stereo_calibrate = camera_calibration.nodes.art_stereo_calibrate:main',
+            'art_stereo_status = camera_calibration.nodes.art_stereo_status:main',
         ],
     },
 )
