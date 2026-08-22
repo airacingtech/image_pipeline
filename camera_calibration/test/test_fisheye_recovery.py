@@ -66,6 +66,47 @@ def test_camera_model_is_available_from_installed_module():
     assert CAMERA_MODEL.FISHEYE.value == 1
 
 
+def test_full_coverage_mode_does_not_treat_40_samples_as_complete():
+    board = ChessboardInfo('chessboard', 10, 7, 0.07)
+    calibrator = MonoCalibrator(
+        [board],
+        pattern=Patterns.Chessboard,
+        require_full_coverage=True,
+    )
+    calibrator.db = [([0.5, 0.5, 0.1, 0.0], None)] * 40
+
+    calibrator.compute_goodenough()
+
+    assert calibrator.goodenough is False
+
+
+def test_default_mode_preserves_upstream_40_sample_shortcut():
+    board = ChessboardInfo('chessboard', 10, 7, 0.07)
+    calibrator = MonoCalibrator([board], pattern=Patterns.Chessboard)
+    calibrator.db = [([0.5, 0.5, 0.1, 0.0], None)] * 40
+
+    calibrator.compute_goodenough()
+
+    assert calibrator.goodenough is True
+
+
+def test_full_coverage_mode_completes_when_every_dimension_is_covered():
+    board = ChessboardInfo('chessboard', 10, 7, 0.07)
+    calibrator = MonoCalibrator(
+        [board],
+        pattern=Patterns.Chessboard,
+        require_full_coverage=True,
+    )
+    calibrator.db = [
+        ([0.0, 0.0, 0.1, 0.0], None),
+        ([0.7, 0.7, 0.4, 0.5], None),
+    ]
+
+    calibrator.compute_goodenough()
+
+    assert calibrator.goodenough is True
+
+
 def test_fisheye_calibration_preserves_inputs_and_flags():
     object_points, image_points = _points(10)
     flags = cv2.fisheye.CALIB_CHECK_COND

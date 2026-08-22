@@ -142,6 +142,9 @@ def main():
         "--auto-save", type="string", default=None, metavar="ARCHIVE",
         help="automatically calibrate when coverage is sufficient and save the archive")
     group.add_option(
+        "--require-full-coverage", action="store_true", default=False,
+        help="require every pose-coverage dimension; disable the 40-sample shortcut")
+    group.add_option(
         "--auto-progress", type="string", default=None, metavar="JSON",
         help="atomically write automatic collection progress to this JSON file")
     group.add_option(
@@ -264,6 +267,7 @@ def main():
                                  auto_exit=options.auto_exit,
                                  headless=options.headless,
                                  expected_size=expected_size,
+                                 require_full_coverage=options.require_full_coverage,
                                  camera_model=(CAMERA_MODEL.FISHEYE if options.camera_model == "fisheye"
                                                else CAMERA_MODEL.PINHOLE))
     node.spin()

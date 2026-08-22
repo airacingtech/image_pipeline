@@ -103,7 +103,8 @@ class CalibrationNode(Node):
     def __init__(self, name, boards, service_check = True, synchronizer = message_filters.TimeSynchronizer, flags = 0,
                  fisheye_flags = 0, pattern=Patterns.Chessboard, camera_name='', checkerboard_flags = 0,
                  max_chessboard_speed = -1, queue_size = 1,
-                 camera_model=CAMERA_MODEL.PINHOLE, expected_size=None):
+                 camera_model=CAMERA_MODEL.PINHOLE, expected_size=None,
+                 require_full_coverage=False):
         super().__init__(name)
 
         self.set_camera_info_service = self.create_client(sensor_msgs.srv.SetCameraInfo, "camera/set_camera_info")
@@ -135,6 +136,7 @@ class CalibrationNode(Node):
         self._expected_size = expected_size
         self._fatal_error = None
         self._max_chessboard_speed = max_chessboard_speed
+        self._require_full_coverage = require_full_coverage
         lsub = message_filters.Subscriber(self, sensor_msgs.msg.Image, 'left', qos_profile=self.get_topic_qos("left"))
         rsub = message_filters.Subscriber(self, sensor_msgs.msg.Image, 'right', qos_profile=self.get_topic_qos("right"))
         ts = synchronizer([lsub, rsub], 4)
@@ -181,11 +183,13 @@ class CalibrationNode(Node):
             if self._camera_name:
                 self.c = MonoCalibrator(self._boards, self._calib_flags, self._fisheye_calib_flags, self._pattern, name=self._camera_name,
                                         checkerboard_flags=self._checkerboard_flags,
-                                        max_chessboard_speed = self._max_chessboard_speed)
+                                        max_chessboard_speed = self._max_chessboard_speed,
+                                        require_full_coverage=self._require_full_coverage)
             else:
                 self.c = MonoCalibrator(self._boards, self._calib_flags, self._fisheye_calib_flags, self._pattern,
                                         checkerboard_flags=self._checkerboard_flags,
-                                        max_chessboard_speed = self._max_chessboard_speed)
+                                        max_chessboard_speed = self._max_chessboard_speed,
+                                        require_full_coverage=self._require_full_coverage)
             self.c.set_cammodel(self._camera_model)
 
         # This should just call the MonoCalibrator
@@ -210,11 +214,13 @@ class CalibrationNode(Node):
             if self._camera_name:
                 self.c = StereoCalibrator(self._boards, self._calib_flags, self._fisheye_calib_flags, self._pattern, name=self._camera_name,
                                           checkerboard_flags=self._checkerboard_flags,
-                                          max_chessboard_speed = self._max_chessboard_speed)
+                                          max_chessboard_speed = self._max_chessboard_speed,
+                                          require_full_coverage=self._require_full_coverage)
             else:
                 self.c = StereoCalibrator(self._boards, self._calib_flags, self._fisheye_calib_flags, self._pattern,
                                           checkerboard_flags=self._checkerboard_flags,
-                                          max_chessboard_speed = self._max_chessboard_speed)
+                                          max_chessboard_speed = self._max_chessboard_speed,
+                                          require_full_coverage=self._require_full_coverage)
             self.c.set_cammodel(self._camera_model)
 
         drawable = self.c.handle_msg(msg)

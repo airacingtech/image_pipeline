@@ -484,9 +484,12 @@ ros2 run camera_calibration art_camera_calibrator "$CAMERA" \
 
 The node subscribes directly to the vehicle ROS image topic. It starts
 collecting immediately, accepts only poses sufficiently different from the
-existing dataset, and automatically solves and saves when all coverage bars are
-complete or 40 samples have been accepted. No **CALIBRATE** or **SAVE** click is
-required. `progress.json` reports the accepted sample count and current state.
+existing dataset, and automatically starts OpenCV calibration only after all
+four pose-coverage bars are complete. ART entry points disable the upstream
+40-sample shortcut: an image count alone never declares collection complete.
+The run is complete only after OpenCV solves successfully and the archive is
+saved. No **CALIBRATE** or **SAVE** click is required. `progress.json` reports
+the accepted sample count and current state.
 The ART wrapper also rejects any input that is not exactly `2064 x 1544`.
 For this rounded-edge physical board, the wrapper disables OpenCV's
 `CALIB_CB_FAST_CHECK` because it can falsely reject clear detections after the

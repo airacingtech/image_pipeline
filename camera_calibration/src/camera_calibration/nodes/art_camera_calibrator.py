@@ -45,6 +45,9 @@ def build_cameracalibrator_args(
         raise ValueError('--image-topic must be an absolute ROS topic')
 
     arguments = ['--camera-model', model]
+    # ART automatic collection must be driven by complete pose coverage, not
+    # the upstream fallback that declares any 40 accepted samples sufficient.
+    arguments.append('--require-full-coverage')
     if model == 'fisheye':
         arguments.extend([
             '--fisheye-recompute-extrinsics',

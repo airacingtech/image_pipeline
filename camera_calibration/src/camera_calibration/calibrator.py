@@ -400,7 +400,8 @@ class Calibrator():
     Base class for calibration system
     """
     def __init__(self, boards, flags=0, fisheye_flags = 0, pattern=Patterns.Chessboard, name='',
-            checkerboard_flags=cv2.CALIB_CB_FAST_CHECK, max_chessboard_speed = -1.0):
+            checkerboard_flags=cv2.CALIB_CB_FAST_CHECK, max_chessboard_speed = -1.0,
+            require_full_coverage = False):
         # Ordering the dimensions for the different detectors is actually a minefield...
         if pattern == Patterns.Chessboard:
             # Make sure n_cols > n_rows to agree with OpenCV CB detector output
@@ -439,6 +440,7 @@ class Calibrator():
         self.last_frame_corners = None
         self.last_frame_ids = None
         self.max_chessboard_speed = max_chessboard_speed
+        self.require_full_coverage = require_full_coverage
 
     def mkgray(self, msg):
         """
@@ -555,9 +557,12 @@ class Calibrator():
 
         # For each parameter, judge how much progress has been made toward adequate variation
         progress = [min((hi - lo) / r, 1.0) for (lo, hi, r) in zip(min_params, max_params, self.param_ranges)]
-        # If we have lots of samples, allow calibration even if not all parameters are green
+        coverage_complete = all([p == 1.0 for p in progress])
+        # Preserve the upstream 40-sample shortcut unless the caller explicitly
+        # requires every pose-coverage dimension to be complete.
         # TODO Awkward that we update self.goodenough instead of returning it
-        self.goodenough = (len(self.db) >= 40) or all([p == 1.0 for p in progress])
+        self.goodenough = coverage_complete or (
+            not self.require_full_coverage and len(self.db) >= 40)
 
         return list(zip(self._param_names, min_params, max_params, progress))
 
