@@ -1,4 +1,23 @@
-# ART Center Stereo Calibration SOP
+# ART Six-Camera Calibration SOP
+
+The ART vehicle has one center pinhole stereo pair and four monocular fisheye
+cameras. All calibration input must be the native `2064 x 1544` image.
+
+| Camera | Calibration model | Required workflow |
+| --- | --- | --- |
+| `vimba_front` | fisheye / `equidistant` | ART monocular workflow |
+| `vimba_left` | fisheye / `equidistant` | ART monocular workflow |
+| `vimba_right` | fisheye / `equidistant` | ART monocular workflow |
+| `vimba_rear` | fisheye / `equidistant` | ART monocular workflow |
+| `vimba_front_left_center` | pinhole / `plumb_bob` | ART joint stereo workflow |
+| `vimba_front_right_center` | pinhole / `plumb_bob` | ART joint stereo workflow |
+
+The six-camera job consists of four monocular fisheye sessions and one joint
+center-stereo session. Independently calibrating the two center cameras does not
+produce the stereo baseline and is not an acceptable replacement for the joint
+stereo workflow.
+
+## Center pinhole stereo workflow
 
 This SOP calibrates the following synchronized stereo pair:
 
@@ -7,13 +26,15 @@ This SOP calibrates the following synchronized stereo pair:
 - Target: 11 x 8 checkerboard squares, which are **10 x 7 OpenCV inner corners**
 - Square size: `0.070 m`
 - Capture: `2064 x 1544`, `10 Hz`, GigE Vision `Action0`
+- Model: pinhole intrinsics and a joint left-to-right stereo transform
 
 The vehicle publishes the two raw image streams. The `roar` workstation saves
 synchronized pairs locally. Board detection and calibration run offline, so the
 operator does not need to wait for live corner detection at every pose.
 
-The legacy `cameracalibrator`, `cameracheck`, and monocular calibration workflow
-remain available and are not modified by this SOP.
+The standard `cameracalibrator` remains available. The ART wrapper fixes the
+camera model from the vehicle camera name so a fisheye camera cannot
+accidentally be solved with the pinhole model.
 
 ## 1. Build and source
 
@@ -207,10 +228,60 @@ Do not automatically overwrite production CameraInfo files. Before deployment:
 7. deploy the generated CameraInfo files through the normal reviewed vehicle
    configuration process.
 
+## 8. Four monocular fisheye cameras
+
+Calibrate `vimba_front`, `vimba_left`, `vimba_right`, and `vimba_rear` one at a
+time. The vehicle must publish the selected raw image topic at `2064 x 1544`;
+do not calibrate from a compressed or reduced-resolution topic.
+
+On the `roar` workstation, first inspect the resolved command:
+
+```bash
+CAMERA=vimba_front
+
+ros2 run camera_calibration art_camera_calibrator "$CAMERA" \
+  --print-command
+```
+
+Then start the interactive calibration:
+
+```bash
+ros2 run camera_calibration art_camera_calibrator "$CAMERA"
+```
+
+The wrapper fixes the physical target to **7 x 10 inner corners** with a
+`0.0700 m` square. This is the same 11 x 8-square board used by the stereo
+workflow, rotated by 90 degrees. It also fixes these OpenCV fisheye options:
+
+- `CALIB_RECOMPUTE_EXTRINSIC`;
+- `CALIB_CHECK_COND`;
+- `CALIB_FIX_SKEW`.
+
+Collect sharp views across the center, four corners, four edges, multiple
+distances, and positive/negative yaw, pitch, and roll. After the GUI reports
+adequate coverage, select **CALIBRATE**, inspect the undistorted preview, then
+select **SAVE**. The saved archive is `/tmp/calibrationdata.tar.gz`; copy it to
+a camera-specific result path immediately because the next session overwrites
+that filename.
+
+For every monocular result, extract and review `ost.yaml`. Acceptance requires:
+
+- `image_width: 2064` and `image_height: 1544`;
+- `camera_name` matching the selected camera;
+- `distortion_model: equidistant`;
+- four finite fisheye distortion coefficients;
+- a finite, positive camera matrix;
+- a visually acceptable undistorted preview with useful field of view.
+
+Repeat the workflow for all four fisheye cameras. Do not deploy any result until
+all four archives and the center stereo report have been reviewed together.
+
 ## Common failures
 
 - `516 x 384` images: the calibration override was not applied; stop the old
   camera launch and restart `art_stereo_capture.launch.py`.
+- `plumb_bob` from an outer camera: the generic calibrator was started without
+  the ART wrapper; repeat that camera with `art_camera_calibrator`.
 - Timestamp p95 above `2 ms`: check PTP state, Action0 triggering, network load,
   and whether both cameras are using the dedicated launch.
 - Fewer than 15 accepted pairs: capture a new, sharper, more diverse session;
