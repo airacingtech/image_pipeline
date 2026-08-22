@@ -50,6 +50,9 @@ def test_all_scripts_source_vehicle_workspaces_and_do_not_start_cameras():
 
     for script in scripts:
         text = script.read_text(encoding='utf-8')
+        assert text.index('set +u') < text.index('source /opt/ros/jazzy/setup.bash')
+        assert text.index('set -u', text.index('set +u')) > text.index(
+            'source /home/autera-admin/ART/image_pipeline/install/setup.bash')
         assert 'source /opt/ros/jazzy/setup.bash' in text
         assert 'source /home/autera-admin/ART/race_common/install/setup.bash' in text
         assert 'source /home/autera-admin/ART/image_pipeline/install/setup.bash' in text

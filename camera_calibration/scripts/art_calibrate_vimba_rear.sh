@@ -23,9 +23,11 @@ trap pause_on_exit EXIT
 mkdir -p "${SESSION}"
 exec > >(tee -a "${SESSION}/launcher.log") 2>&1
 
+set +u
 source /opt/ros/jazzy/setup.bash
 source /home/autera-admin/ART/race_common/install/setup.bash
 source /home/autera-admin/ART/image_pipeline/install/setup.bash
+set -u
 export PYTHONUNBUFFERED=1
 export DISPLAY="${DISPLAY:-:0}"
 if [[ -z "${XAUTHORITY:-}" && -r /run/user/1000/gdm/Xauthority ]]; then
