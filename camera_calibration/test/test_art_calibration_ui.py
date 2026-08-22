@@ -17,6 +17,7 @@ from camera_calibration.nodes.art_calibration_ui import (
     mono_archive_summary,
     PREVIEW_TOPICS,
     RELAY_CAMERA_BY_TASK,
+    StreamMonitor,
     stream_gate,
     STREAM_TOPICS,
     task_for,
@@ -24,7 +25,10 @@ from camera_calibration.nodes.art_calibration_ui import (
     TASKS,
     validate_session_name,
 )
+import cv2
+import numpy as np
 import pytest
+from sensor_msgs.msg import CompressedImage
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -206,3 +210,38 @@ def test_demo_streams_do_not_expire_while_operator_reviews_page(tmp_path):
         assert state['stream_gate']['pass'] is True
     finally:
         app.close()
+
+
+def test_monitor_draws_detected_inner_corners_on_preview():
+    monitor = StreamMonitor(demo=True)
+    try:
+        square_px = 48
+        margin = 60
+        gray = np.full((8 * square_px + 2 * margin,
+                        11 * square_px + 2 * margin), 255, np.uint8)
+        for row in range(8):
+            for column in range(11):
+                if (row + column) % 2 == 0:
+                    y0 = margin + row * square_px
+                    x0 = margin + column * square_px
+                    gray[y0:y0 + square_px, x0:x0 + square_px] = 0
+        ok, encoded = cv2.imencode('.jpg', gray)
+        assert ok
+        message = CompressedImage()
+        message.data = encoded.tobytes()
+
+        monitor._update_detection('vimba_front', message)
+        rendered = cv2.imdecode(
+            np.frombuffer(monitor.frame('vimba_front'), dtype=np.uint8),
+            cv2.IMREAD_COLOR,
+        )
+
+        assert monitor.snapshot()['vimba_front']['board_detected'] is True
+        assert rendered is not None
+        rendered_i16 = rendered.astype(np.int16)
+        assert np.any(
+            (rendered_i16[:, :, 1] > rendered_i16[:, :, 0] + 25)
+            & (rendered_i16[:, :, 1] > rendered_i16[:, :, 2] + 25)
+        )
+    finally:
+        monitor.close()

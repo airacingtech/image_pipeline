@@ -20,6 +20,8 @@ from rclpy.serialization import deserialize_message
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image
 import websocket
 
+from camera_calibration.nodes.art_stereo_capture import image_to_gray
+
 
 SUBPROTOCOL = 'foxglove.sdk.v1'
 PREVIEW_INTERVAL_SEC = 0.18
@@ -174,8 +176,11 @@ class FoxgloveRelay(Node):
 
     @staticmethod
     def _compress_preview(message: Image) -> CompressedImage:
-        image = np.frombuffer(message.data, dtype=np.uint8)
-        image = image.reshape((message.height, message.step))[:, :message.width]
+        # Preserve the old UI's image contract: Bayer camera frames must be
+        # demosaiced before resize/JPEG compression.  Treating the Bayer mosaic
+        # as mono leaves a strong 2x2 grid in the preview and makes checkerboard
+        # corner detection unreliable.
+        image = image_to_gray(message)
         preview_width = min(960, message.width)
         scale = preview_width / message.width
         preview_height = max(1, int(round(message.height * scale)))

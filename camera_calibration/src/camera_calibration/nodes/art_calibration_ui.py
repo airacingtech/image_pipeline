@@ -432,6 +432,7 @@ class StreamMonitor:
                 'board_detected': False,
                 'sharpness': None,
                 'jpeg': None,
+                'detection_jpeg': None,
             }
             for key, topic in STREAM_TOPICS.items()
         }
@@ -525,6 +526,7 @@ class StreamMonitor:
                     record['last_monotonic'] = None
                     record['last_detection_monotonic'] = 0.0
                     record['board_detected'] = False
+                    record['detection_jpeg'] = None
                 self._subscriptions[key] = self._node.create_subscription(
                     self._compressed_type,
                     PREVIEW_TOPICS[key],
@@ -579,10 +581,27 @@ class StreamMonitor:
             from camera_calibration.nodes.art_stereo_capture import sharpness
 
             preview = self._preview_gray(msg)
-            detection = detect_board(preview, self._board, fast=True)
+            # The ART board has rounded cells at its outer boundary.  The SB
+            # detector is markedly more reliable on real fisheye previews than
+            # the classic fast checkerboard path, especially under perspective.
+            detection = detect_board(preview, self._board, fast=False)
+            detection_jpeg = None
+            if detection is not None:
+                overlay = cv2.cvtColor(preview, cv2.COLOR_GRAY2BGR)
+                cv2.drawChessboardCorners(
+                    overlay,
+                    (self._board.columns, self._board.rows),
+                    detection.image_points.reshape(-1, 1, 2),
+                    True,
+                )
+                ok, encoded = cv2.imencode(
+                    '.jpg', overlay, [cv2.IMWRITE_JPEG_QUALITY, 82])
+                if ok:
+                    detection_jpeg = encoded.tobytes()
             with self._lock:
                 self._records[key]['board_detected'] = detection is not None
                 self._records[key]['sharpness'] = sharpness(preview)
+                self._records[key]['detection_jpeg'] = detection_jpeg
         finally:
             with self._lock:
                 self._detection_pending.discard(key)
@@ -630,7 +649,9 @@ class StreamMonitor:
     def frame(self, key: str) -> bytes | None:
         with self._lock:
             record = self._records.get(key)
-            return record['jpeg'] if record is not None else None
+            if record is None:
+                return None
+            return record['detection_jpeg'] or record['jpeg']
 
     def close(self) -> None:
         if self.demo or self._rclpy is None:
