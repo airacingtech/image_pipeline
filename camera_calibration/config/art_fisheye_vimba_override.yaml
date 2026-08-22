@@ -1,0 +1,29 @@
+/**:
+  ros__parameters:
+    # Calibration publishes raw Bayer ROS images without the production
+    # compression and perception graph.
+    publish_compressed: false
+    use_measurement_time: true
+    ptp_offset: -37
+
+    # Each perimeter camera is independent; FixedRate avoids needing the
+    # stereo Action0 trigger while enforcing the calibration rate.
+    feature/PtpMode: 'Slave'
+    feature/TriggerSelector: FrameStart
+    feature/TriggerMode: 'On'
+    feature/TriggerSource: 'FixedRate'
+    feature/TriggerActivation: RisingEdge
+    feature/TriggerDelayAbs: 0.0
+    feature/TriggerOverlap: 'Off'
+
+    # Native Mako G-319C Bayer capture contract used by the fisheye solver.
+    feature/PixelFormat: BayerRG8
+    feature/Width: 2064
+    feature/Height: 1544
+    feature/OffsetX: 0
+    feature/OffsetY: 0
+    feature/DecimationHorizontal: 1
+    feature/DecimationVertical: 1
+    feature/BinningHorizontal: 1
+    feature/BinningVertical: 1
+    feature/AcquisitionFrameRateAbs: 10.0

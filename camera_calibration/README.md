@@ -60,9 +60,39 @@ ros2 run camera_calibration art_calibration_ui --demo --open-browser
 
 The vehicle-side camera launch remains a separate operation. Before using the
 page for a real session, start the required native-resolution publishers on the
-vehicle and confirm that the `roar` workstation is on the same ROS domain. For
-the center pair, use `art_stereo_capture.launch.py` as described below. For a
-surround camera, start its normal raw publisher at `2064 x 1544` and `10 Hz`.
+vehicle. By default, the UI connects to the vehicle Foxglove Bridge at
+`ws://10.42.27.200:8765/` and relays only the currently selected task into local
+ROS. Switching between Stereo, Front, Left, Right, and Rear automatically
+switches the relay, so six 2K streams are never pulled at once. For the center
+pair, use `art_stereo_capture.launch.py` as described below. For a surround
+camera, start its normal raw publisher at `2064 x 1544` and `10 Hz`.
+
+For a complete five-job calibration session, run the two dedicated vehicle
+launches instead of the production all-camera launch. The fisheye launch skips
+the two center cameras, so it does not block while the stereo launch owns them:
+
+```bash
+# Vehicle terminal 1: center pair
+ros2 launch camera_calibration art_stereo_capture.launch.py
+
+# Vehicle terminal 2: four perimeter fisheye cameras
+ros2 launch camera_calibration art_fisheye_capture.launch.py
+```
+
+Do not run `ros2 launch isaac_launch vimba.launch.py` at the same time. That
+production launch tries to open the center cameras in sequence and can prevent
+the later perimeter camera components from loading when the calibration stereo
+launch already owns the center pair.
+
+Use a different bridge address with `--foxglove-url`. If DDS is already routed
+directly from the vehicle to `roar`, disable the managed relay with
+`--direct-ros`:
+
+```bash
+ros2 run camera_calibration art_calibration_ui \
+  --foxglove-url ws://10.42.27.200:8765/ --open-browser
+ros2 run camera_calibration art_calibration_ui --direct-ros --open-browser
+```
 
 ### Web UI SOP
 

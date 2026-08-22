@@ -41,6 +41,7 @@ setup(
             'tarfile_calibration = camera_calibration.nodes.tarfile_calibration:main',
             'art_camera_calibrator = camera_calibration.nodes.art_camera_calibrator:main',
             'art_calibration_ui = camera_calibration.nodes.art_calibration_ui:main',
+            'art_foxglove_relay = camera_calibration.nodes.art_foxglove_relay:main',
             'art_stereo_capture = camera_calibration.nodes.art_stereo_capture:main',
             'art_stereo_calibrate = camera_calibration.nodes.art_stereo_calibrate:main',
             'art_stereo_status = camera_calibration.nodes.art_stereo_status:main',

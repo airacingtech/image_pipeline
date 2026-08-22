@@ -83,6 +83,14 @@ STREAM_TOPICS = {
     'vimba_rear': '/vimba_rear/image',
 }
 
+RELAY_CAMERA_BY_TASK = {
+    'stereo_center': 'stereo',
+    'vimba_front': 'front',
+    'vimba_left': 'left',
+    'vimba_right': 'right',
+    'vimba_rear': 'rear',
+}
+
 POSES = (
     {'id': 'center-medium', 'title': '中心 · 中距离', 'instruction':
      '保持整块板完整可见，并让板面大致平行于成像平面。',
@@ -302,6 +310,96 @@ class ProcessManager:
         self.stop()
 
 
+class RelayManager:
+    """Keep exactly one vehicle-to-local camera relay active for the UI task."""
+
+    def __init__(self, foxglove_url: str | None):
+        self.url = foxglove_url
+        self._lock = threading.Lock()
+        self._process: subprocess.Popen | None = None
+        self._camera: str | None = None
+        self._command: list[str] = []
+        self._logs: deque[str] = deque(maxlen=80)
+        self._return_code: int | None = None
+
+    def _stop_locked(self) -> None:
+        process = self._process
+        if process is None or process.poll() is not None:
+            return
+        os.killpg(process.pid, signal.SIGINT)
+        self._logs.append(f'stopping {self._camera} relay')
+        try:
+            process.wait(timeout=3.0)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGTERM)
+            process.wait(timeout=2.0)
+
+    def activate(self, task: TaskSpec) -> None:
+        if self.url is None:
+            return
+        camera = RELAY_CAMERA_BY_TASK[task.task_id]
+        with self._lock:
+            if (
+                self._camera == camera
+                and self._process is not None
+                and self._process.poll() is None
+            ):
+                return
+            self._stop_locked()
+            self._camera = camera
+            self._return_code = None
+            self._command = [
+                'ros2', 'run', 'camera_calibration', 'art_foxglove_relay',
+                '--url', self.url, '--camera', camera,
+            ]
+            self._logs.append(f'$ {command_text(self._command)}')
+            try:
+                self._process = subprocess.Popen(
+                    self._command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    start_new_session=True,
+                )
+            except OSError as exc:
+                self._process = None
+                self._return_code = 127
+                self._logs.append(f'failed to start relay: {exc}')
+                return
+            process = self._process
+
+        def consume() -> None:
+            assert process.stdout is not None
+            for line in process.stdout:
+                with self._lock:
+                    self._logs.append(line.rstrip())
+            return_code = process.wait()
+            with self._lock:
+                if self._process is process:
+                    self._return_code = return_code
+                self._logs.append(f'{camera} relay exited with code {return_code}')
+
+        threading.Thread(
+            target=consume, name=f'calibration-relay-{camera}', daemon=True).start()
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            running = self._process is not None and self._process.poll() is None
+            return {
+                'enabled': self.url is not None,
+                'running': running,
+                'camera': self._camera,
+                'url': self.url,
+                'return_code': self._return_code,
+                'logs': list(self._logs),
+            }
+
+    def close(self) -> None:
+        with self._lock:
+            self._stop_locked()
+
+
 class StreamMonitor:
     def __init__(self, demo: bool = False):
         self.demo = demo
@@ -395,6 +493,12 @@ class StreamMonitor:
             for key in set(self._subscriptions) - requested:
                 self._node.destroy_subscription(self._subscriptions.pop(key))
             for key in requested - set(self._subscriptions):
+                with self._lock:
+                    record = self._records[key]
+                    record['stamps'].clear()
+                    record['last_monotonic'] = None
+                    record['last_preview_monotonic'] = 0.0
+                    record['board_detected'] = False
                 self._subscriptions[key] = self._node.create_subscription(
                     self._image_type,
                     STREAM_TOPICS[key],
@@ -552,12 +656,19 @@ def mono_archive_summary(path: Path) -> dict | None:
 
 
 class CalibrationApp:
-    def __init__(self, assets_dir: Path, data_root: Path, demo: bool):
+    def __init__(
+        self,
+        assets_dir: Path,
+        data_root: Path,
+        demo: bool,
+        foxglove_url: str | None = None,
+    ):
         self.assets_dir = assets_dir
         self.data_root = data_root.expanduser().resolve()
         self.demo = demo
         self.monitor = StreamMonitor(demo=demo)
         self.process = ProcessManager()
+        self.relay = RelayManager(None if demo else foxglove_url)
 
     def session_status(self, task: TaskSpec, session: str) -> dict:
         paths = task_paths(self.data_root, session, task)
@@ -590,6 +701,7 @@ class CalibrationApp:
 
     def state(self, task_id: str, session: str) -> dict:
         task = task_for(task_id)
+        self.relay.activate(task)
         self.monitor.activate(task.stream_keys)
         streams = self.monitor.snapshot()
         gate_ok, gate_failures = stream_gate(task, streams)
@@ -608,6 +720,7 @@ class CalibrationApp:
             'stream_gate': {'pass': gate_ok, 'failures': gate_failures},
             'session': self.session_status(task, session),
             'process': self.process.snapshot(),
+            'transport': self.relay.snapshot(),
             'data_root': str(self.data_root),
         }
 
@@ -618,6 +731,7 @@ class CalibrationApp:
         paths = task_paths(self.data_root, session, task)
         paths['base'].mkdir(parents=True, exist_ok=True)
 
+        self.relay.activate(task)
         self.monitor.activate(task.stream_keys)
         streams = self.monitor.snapshot()
         gate_ok, failures = stream_gate(task, streams)
@@ -668,6 +782,7 @@ class CalibrationApp:
 
     def close(self) -> None:
         self.process.close()
+        self.relay.close()
         self.monitor.close()
 
 
@@ -764,6 +879,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         '--data-root', default='~/camera_calibration_data',
         help='local roar directory for capture sessions and results')
     parser.add_argument('--demo', action='store_true', help='show synthetic healthy streams')
+    parser.add_argument(
+        '--foxglove-url', default='ws://10.42.27.200:8765/',
+        help='vehicle Foxglove Bridge used to relay only the selected camera')
+    parser.add_argument(
+        '--direct-ros', action='store_true',
+        help='disable the managed Foxglove relay and subscribe to local ROS topics directly')
     parser.add_argument('--open-browser', action='store_true')
     parser.add_argument('--assets-dir', help=argparse.SUPPRESS)
     return parser.parse_args(argv)
@@ -782,7 +903,12 @@ def main(argv: list[str] | None = None) -> int:
     if not (assets_dir / 'index.html').is_file():
         raise SystemExit(f'web assets are missing from {assets_dir}')
 
-    app = CalibrationApp(assets_dir, Path(args.data_root), demo=args.demo)
+    app = CalibrationApp(
+        assets_dir,
+        Path(args.data_root),
+        demo=args.demo,
+        foxglove_url=None if args.direct_ros else args.foxglove_url,
+    )
     server = ThreadingHTTPServer((args.host, args.port), make_handler(app))
     url = f'http://{args.host}:{server.server_address[1]}'
     print(f'ART calibration UI: {url}')

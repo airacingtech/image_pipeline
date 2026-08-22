@@ -130,7 +130,12 @@ function renderHeader() {
 
   const activeStreams = task.stream_keys.map((key) => state.streams[key]);
   const online = activeStreams.every((stream) => stream.online);
-  pill(elements["ros-badge"], online ? "ROS 图像在线" : "ROS 图像离线", online ? "success" : "danger");
+  const transport = state.transport || { enabled: false, running: true };
+  let label = online ? "ROS 图像在线" : "ROS 图像离线";
+  if (!online && transport.enabled) {
+    label = transport.running ? "等待车端图像" : "车端转发未运行";
+  }
+  pill(elements["ros-badge"], label, online ? "success" : "danger");
 }
 
 function refreshFrames() {
@@ -260,6 +265,8 @@ function renderControls() {
   const task = state.selected_task;
   const streams = task.stream_keys.map((key) => state.streams[key]);
   const checks = [
+    [state.transport && state.transport.enabled ? "所选相机车端转发已运行" : "使用本机 ROS 图像流",
+      !state.transport || !state.transport.enabled || state.transport.running],
     ["所需 ROS 图像流在线", streams.every((stream) => stream.online)],
     ["所有图像均为 2064 × 1544", streams.every(isSizeGood)],
     ["所有图像帧率在 8–12 Hz", streams.every(isRateGood)],
