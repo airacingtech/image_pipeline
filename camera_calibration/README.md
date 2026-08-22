@@ -488,6 +488,10 @@ existing dataset, and automatically solves and saves when all coverage bars are
 complete or 40 samples have been accepted. No **CALIBRATE** or **SAVE** click is
 required. `progress.json` reports the accepted sample count and current state.
 The ART wrapper also rejects any input that is not exactly `2064 x 1544`.
+For this rounded-edge physical board, the wrapper disables OpenCV's
+`CALIB_CB_FAST_CHECK` because it can falsely reject clear detections after the
+2K frame is downsampled. The detector retries difficult frames with the more
+robust sector-based detector on raw, histogram-equalized, and CLAHE images.
 
 The wrapper fixes the physical target to **7 x 10 inner corners** with a
 `0.0700 m` square. This is the same 11 x 8-square board used by the stereo

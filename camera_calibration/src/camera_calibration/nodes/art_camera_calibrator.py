@@ -68,6 +68,9 @@ def build_cameracalibrator_args(
         '--size', '7x10',
         '--square', '0.0700',
         '--no-service-check',
+        # The rounded outer cells on the ART board can trigger false negatives
+        # in OpenCV's inexpensive pre-check after the 2K image is downsampled.
+        '--disable_calib_cb_fast_check',
         '--ros-args',
         '-r', f'image:={topic}',
     ])

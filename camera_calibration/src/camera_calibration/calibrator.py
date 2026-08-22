@@ -260,8 +260,35 @@ def _get_corners(img, board, refine = True, checkerboard_flags=0):
         mono = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     else:
         mono = img
-    (ok, corners) = cv2.findChessboardCorners(mono, (board.n_cols, board.n_rows), flags = cv2.CALIB_CB_ADAPTIVE_THRESH |
-                                              cv2.CALIB_CB_NORMALIZE_IMAGE | checkerboard_flags)
+    board_size = (board.n_cols, board.n_rows)
+    (ok, corners) = cv2.findChessboardCorners(
+        mono,
+        board_size,
+        flags=(
+            cv2.CALIB_CB_ADAPTIVE_THRESH
+            | cv2.CALIB_CB_NORMALIZE_IMAGE
+            | checkerboard_flags
+        ),
+    )
+    if (
+        not ok
+        and not (checkerboard_flags & cv2.CALIB_CB_FAST_CHECK)
+        and hasattr(cv2, 'findChessboardCornersSB')
+    ):
+        sb_flags = cv2.CALIB_CB_NORMALIZE_IMAGE
+        sb_flags |= getattr(cv2, 'CALIB_CB_EXHAUSTIVE', 0)
+        sb_flags |= getattr(cv2, 'CALIB_CB_ACCURACY', 0)
+        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+        # The ART target has rounded outer black cells and is often viewed
+        # against a bright garage opening. Try contrast-normalized copies only
+        # after the inexpensive classic detector fails.
+        for candidate in (mono, cv2.equalizeHist(mono), clahe.apply(mono)):
+            (ok, corners) = cv2.findChessboardCornersSB(
+                candidate, board_size, flags=sb_flags)
+            if ok:
+                corners = numpy.asarray(corners, dtype=numpy.float32).reshape(
+                    -1, 1, 2)
+                break
     if not ok:
         return (ok, corners)
 

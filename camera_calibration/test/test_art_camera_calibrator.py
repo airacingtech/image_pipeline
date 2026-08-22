@@ -24,6 +24,7 @@ def test_four_surround_cameras_use_fisheye(camera_name):
     assert arguments[arguments.index('--square') + 1] == '0.0700'
     assert arguments[arguments.index('--expected-width') + 1] == '2064'
     assert arguments[arguments.index('--expected-height') + 1] == '1544'
+    assert '--disable_calib_cb_fast_check' in arguments
 
 
 @pytest.mark.parametrize('camera_name', sorted(PINHOLE_STEREO_CAMERAS))

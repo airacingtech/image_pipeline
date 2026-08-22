@@ -5,6 +5,7 @@ from unittest import mock
 
 from camera_calibration.calibrator import (
     _calibrate_fisheye,
+    _get_corners,
     CalibrationException,
     CAMERA_MODEL,
     ChessboardInfo,
@@ -33,6 +34,32 @@ def _success_result():
         [],
         [],
     )
+
+
+def test_checkerboard_detection_uses_sb_fallback_after_classic_miss():
+    board = ChessboardInfo('chessboard', 10, 7, 0.07)
+    image = numpy.zeros((480, 640), dtype=numpy.uint8)
+    corners = numpy.mgrid[0:10, 0:7].T.reshape(-1, 1, 2).astype(numpy.float32)
+    corners *= 20.0
+    corners += 20.0
+
+    with (
+        mock.patch(
+            'camera_calibration.calibrator.cv2.findChessboardCorners',
+            return_value=(False, None),
+        ),
+        mock.patch(
+            'camera_calibration.calibrator.cv2.findChessboardCornersSB',
+            return_value=(True, corners.copy()),
+        ) as find_sb,
+        mock.patch('camera_calibration.calibrator.cv2.cornerSubPix'),
+    ):
+        found, detected = _get_corners(
+            image, board, checkerboard_flags=0)
+
+    assert found is True
+    assert detected.shape == (70, 1, 2)
+    find_sb.assert_called_once()
 
 
 def test_camera_model_is_available_from_installed_module():
