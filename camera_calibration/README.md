@@ -60,8 +60,8 @@ ros2 run camera_calibration art_calibration_ui --demo --open-browser
 
 The vehicle-side camera launch remains a separate operation. Before using the
 page for a real session, start the required native-resolution publishers on the
-vehicle. By default, the UI connects to the vehicle Foxglove Bridge at
-`ws://10.42.27.200:8765/` and relays only the currently selected task into local
+vehicle. By default, the UI connects to the dedicated calibration Foxglove
+Bridge at `ws://10.42.27.200:8766/` and relays only the currently selected task into local
 ROS. Switching between Stereo, Front, Left, Right, and Rear automatically
 switches the relay, so six 2K streams are never pulled at once. For the center
 pair, use `art_stereo_capture.launch.py` as described below. For a surround
@@ -91,6 +91,9 @@ ros2 launch camera_calibration art_stereo_capture.launch.py
 
 # Vehicle terminal 2: four perimeter fisheye cameras
 ros2 launch camera_calibration art_fisheye_capture.launch.py
+
+# Vehicle terminal 3: isolated low-latency calibration transport
+ros2 launch camera_calibration art_calibration_bridge.launch.py
 ```
 
 Do not run `ros2 launch isaac_launch vimba.launch.py` at the same time. That
@@ -104,7 +107,7 @@ directly from the vehicle to `roar`, disable the managed relay with
 
 ```bash
 ros2 run camera_calibration art_calibration_ui \
-  --foxglove-url ws://10.42.27.200:8765/ --open-browser
+  --foxglove-url ws://10.42.27.200:8766/ --open-browser
 ros2 run camera_calibration art_calibration_ui --direct-ros --open-browser
 ```
 

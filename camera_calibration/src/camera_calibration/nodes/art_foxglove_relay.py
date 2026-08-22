@@ -253,7 +253,7 @@ class FoxgloveRelay(Node):
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description='Relay ART camera CDR messages from the vehicle Foxglove Bridge.')
-    parser.add_argument('--url', default='ws://10.42.27.200:8765/')
+    parser.add_argument('--url', default='ws://10.42.27.200:8766/')
     parser.add_argument('--camera', choices=sorted(CAMERA_TOPICS), default='stereo')
     parser.add_argument(
         '--publish-raw', action='store_true',

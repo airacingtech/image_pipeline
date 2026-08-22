@@ -936,7 +936,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help='local roar directory for capture sessions and results')
     parser.add_argument('--demo', action='store_true', help='show synthetic healthy streams')
     parser.add_argument(
-        '--foxglove-url', default='ws://10.42.27.200:8765/',
+        '--foxglove-url', default='ws://10.42.27.200:8766/',
         help='vehicle Foxglove Bridge used to relay only the selected camera')
     parser.add_argument(
         '--direct-ros', action='store_true',
