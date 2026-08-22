@@ -36,8 +36,8 @@ def test_stereo_script_is_independent_and_syntax_valid():
     text = script.read_text(encoding='utf-8')
 
     subprocess.run(['bash', '-n', str(script)], check=True)
-    assert 'LEFT_TOPIC="/vimba_calib_left/image"' in text
-    assert 'RIGHT_TOPIC="/vimba_calib_right/image"' in text
+    assert 'ART_STEREO_LEFT_TOPIC:-/vimba_front_left_center/image' in text
+    assert 'ART_STEREO_RIGHT_TOPIC:-/vimba_front_right_center/image' in text
     assert 'art_stereo_auto' in text
     assert '--max-pairs 60' in text
     assert '--expected-width 2064' in text

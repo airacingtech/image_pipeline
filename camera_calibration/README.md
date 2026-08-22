@@ -28,7 +28,7 @@ desktop. Choose exactly one launcher for the camera being calibrated:
 | `ART 标定：左鱼眼` | `vimba_left` fisheye | `/vimba_left/image` |
 | `ART 标定：右鱼眼` | `vimba_right` fisheye | `/vimba_right/image` |
 | `ART 标定：后鱼眼` | `vimba_rear` fisheye | `/vimba_rear/image` |
-| `ART 标定：中置双目` | joint center pinhole stereo | `/vimba_calib_left/image`, `/vimba_calib_right/image` |
+| `ART 标定：中置双目` | joint center pinhole stereo | `/vimba_front_left_center/image`, `/vimba_front_right_center/image` |
 
 Each launcher opens a terminal, sources ROS Jazzy, `race_common`, and this
 workspace, checks that its required topic already has a publisher, and then
@@ -37,7 +37,8 @@ wakes a Vimba publisher. Start the normal vehicle camera system first.
 
 The OpenCV window shows the live image and detected checkerboard corners. A
 fisheye task automatically solves, writes `calibrationdata.tar.gz`, and exits
-after its coverage gate is complete or 40 distinct views have been accepted.
+only after all four pose-coverage bars are complete and OpenCV solves
+successfully. The ART entry points do not use the upstream 40-sample shortcut.
 The stereo task accepts 60 synchronized distinct pairs, runs the guarded joint
 solve, writes `result/report.json`, and exits. Closing the window, pressing `q`
 or Escape, or pressing Ctrl-C stops only the selected task.
@@ -60,6 +61,15 @@ required when running the same desktop script from a terminal:
 
 ```bash
 ART_STEREO_BASELINE_M=<measured-baseline-in-metres> \
+  /home/autera-admin/ART/image_pipeline/camera_calibration/scripts/art_calibrate_center_stereo.sh
+```
+
+The desktop script defaults to the production Vimba topics. Dedicated
+calibration-topic aliases remain available through explicit overrides:
+
+```bash
+ART_STEREO_LEFT_TOPIC=/vimba_calib_left/image \
+ART_STEREO_RIGHT_TOPIC=/vimba_calib_right/image \
   /home/autera-admin/ART/image_pipeline/camera_calibration/scripts/art_calibrate_center_stereo.sh
 ```
 

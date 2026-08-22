@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-LEFT_TOPIC="/vimba_calib_left/image"
-RIGHT_TOPIC="/vimba_calib_right/image"
+LEFT_TOPIC="${ART_STEREO_LEFT_TOPIC:-/vimba_front_left_center/image}"
+RIGHT_TOPIC="${ART_STEREO_RIGHT_TOPIC:-/vimba_front_right_center/image}"
 RESULT_ROOT="${ART_CALIBRATION_ROOT:-/home/autera-admin/ART/camera_calibration_sessions}"
 SESSION="${RESULT_ROOT}/$(date +%Y%m%d_%H%M%S_%N)/stereo_center"
 
