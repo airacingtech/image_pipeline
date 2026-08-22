@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ART Calibrate Left Fisheye
+Name[zh_CN]=ART 标定：左鱼眼
+Comment=Automatic 2K calibration for vimba_left
+Exec=/home/autera-admin/ART/image_pipeline/camera_calibration/scripts/art_calibrate_vimba_left.sh
+Path=/home/autera-admin/ART/image_pipeline
+Terminal=true
+Icon=camera-photo
+Categories=Utility;
+StartupNotify=true

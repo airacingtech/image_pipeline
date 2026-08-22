@@ -295,6 +295,10 @@ class OpenCVCalibrationNode(CalibrationNode):
 
         CalibrationNode.__init__(self, *args, **kwargs)
 
+        self._window_name = (
+            f'ART {self._camera_name} Calibration'
+            if self._camera_name else 'Camera Calibration'
+        )
         self.queue_display = BufferQueue(maxsize=1)
         self._calibration_running = False
         self._auto_phase = 'collecting'
@@ -312,7 +316,7 @@ class OpenCVCalibrationNode(CalibrationNode):
         while rclpy.ok():
             if self.queue_display.qsize() > 0:
                 self.image = self.queue_display.get()
-                cv2.imshow("display", self.image)
+                cv2.imshow(self._window_name, self.image)
             else:
                 time.sleep(0.1)
             k = cv2.waitKey(6) & 0xFF
@@ -322,9 +326,9 @@ class OpenCVCalibrationNode(CalibrationNode):
                 self.screendump(self.image)
 
     def initWindow(self):
-        cv2.namedWindow("display", cv2.WINDOW_NORMAL)
-        cv2.setMouseCallback("display", self.on_mouse)
-        cv2.createTrackbar("scale", "display", 0, 100, self.on_scale)
+        cv2.namedWindow(self._window_name, cv2.WINDOW_NORMAL)
+        cv2.setMouseCallback(self._window_name, self.on_mouse)
+        cv2.createTrackbar("scale", self._window_name, 0, 100, self.on_scale)
 
     @classmethod
     def putText(cls, img, text, org, color = (0,0,0)):

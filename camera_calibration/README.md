@@ -17,9 +17,59 @@ center-stereo session. Independently calibrating the two center cameras does not
 produce the stereo baseline and is not an acceptable replacement for the joint
 stereo workflow.
 
-## Local operator web UI on roar
+## Recommended vehicle desktop launchers
 
-The recommended operator entry point is a local web application. It runs on the
+The normal one-operator workflow uses five independent launchers on the vehicle
+desktop. Choose exactly one launcher for the camera being calibrated:
+
+| Desktop launcher | Task | Required existing topic(s) |
+| --- | --- | --- |
+| `ART 标定：前鱼眼` | `vimba_front` fisheye | `/vimba_front/image` |
+| `ART 标定：左鱼眼` | `vimba_left` fisheye | `/vimba_left/image` |
+| `ART 标定：右鱼眼` | `vimba_right` fisheye | `/vimba_right/image` |
+| `ART 标定：后鱼眼` | `vimba_rear` fisheye | `/vimba_rear/image` |
+| `ART 标定：中置双目` | joint center pinhole stereo | `/vimba_calib_left/image`, `/vimba_calib_right/image` |
+
+Each launcher opens a terminal, sources ROS Jazzy, `race_common`, and this
+workspace, checks that its required topic already has a publisher, and then
+starts only that calibration task. The launcher never starts, restarts, or
+wakes a Vimba publisher. Start the normal vehicle camera system first.
+
+The OpenCV window shows the live image and detected checkerboard corners. A
+fisheye task automatically solves, writes `calibrationdata.tar.gz`, and exits
+after its coverage gate is complete or 40 distinct views have been accepted.
+The stereo task accepts 60 synchronized distinct pairs, runs the guarded joint
+solve, writes `result/report.json`, and exits. Closing the window, pressing `q`
+or Escape, or pressing Ctrl-C stops only the selected task.
+
+Every double-click creates a new result directory, so a previous session is
+never overwritten:
+
+```text
+/home/autera-admin/ART/camera_calibration_sessions/<timestamp>/<camera-or-stereo_center>/
+```
+
+The executable scripts are kept in `camera_calibration/scripts/`; the matching
+desktop entries are kept in `camera_calibration/desktop/`. To deploy them after
+building the package, copy the five `.desktop` files to
+`/home/autera-admin/Desktop/` and mark them executable/trusted. No web server is
+required.
+
+For the center pair, set the independently measured optical-center baseline
+before double-clicking when it is available:
+
+```bash
+export ART_STEREO_BASELINE_M=<measured-baseline-in-metres>
+```
+
+If it is omitted, the stereo solve still checks that the fitted baseline is
+finite and nonzero, but cannot compare it with a physical measurement. A saved
+stereo session is accepted only after `result/report.json` reports `PASS` and a
+human has reviewed all rectified previews.
+
+## Optional local operator web UI on roar
+
+An alternative operator entry point is a local web application. It runs on the
 `roar` workstation, reads the ROS 2 image topics directly, and saves every
 session under `~/camera_calibration_data`. It does not upload images and it does
 not modify production CameraInfo files.

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ART Calibrate Front Fisheye
+Name[zh_CN]=ART 标定：前鱼眼
+Comment=Automatic 2K calibration for vimba_front
+Exec=/home/autera-admin/ART/image_pipeline/camera_calibration/scripts/art_calibrate_vimba_front.sh
+Path=/home/autera-admin/ART/image_pipeline
+Terminal=true
+Icon=camera-photo
+Categories=Utility;
+StartupNotify=true

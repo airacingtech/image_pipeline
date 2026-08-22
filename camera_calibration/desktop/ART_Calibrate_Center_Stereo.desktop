@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ART Calibrate Center Stereo
+Name[zh_CN]=ART 标定：中置双目
+Comment=Automatic 2K joint calibration for the center pinhole stereo pair
+Exec=/home/autera-admin/ART/image_pipeline/camera_calibration/scripts/art_calibrate_center_stereo.sh
+Path=/home/autera-admin/ART/image_pipeline
+Terminal=true
+Icon=camera-photo
+Categories=Utility;
+StartupNotify=true
