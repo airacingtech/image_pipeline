@@ -83,6 +83,10 @@ function isRateGood(stream) {
   return Number.isFinite(stream.rate_hz) && stream.rate_hz >= 8 && stream.rate_hz <= 12;
 }
 
+function isMonoPreviewRateGood(stream) {
+  return Number.isFinite(stream.rate_hz) && stream.rate_hz >= 0.5;
+}
+
 function isSharp(stream) {
   return Number.isFinite(stream.sharpness) && stream.sharpness >= 30;
 }
@@ -218,7 +222,7 @@ function renderPose() {
     [state.selected_task.kind === "stereo" ? "双目同步" : "帧率正常",
       state.selected_task.kind === "stereo"
         ? Number.isFinite(state.streams.stereo_sync_delta_ms) && state.streams.stereo_sync_delta_ms <= 2
-        : streams.every(isRateGood)]
+        : streams.every(isMonoPreviewRateGood)]
   ];
   elements["quality-gates"].replaceChildren(...gates.map(([label, pass]) =>
     createNode("span", `quality-chip ${pass ? "pass" : "fail"}`, label)));
@@ -269,7 +273,8 @@ function renderControls() {
       !state.transport || !state.transport.enabled || state.transport.running],
     ["所需 ROS 图像流在线", streams.every((stream) => stream.online)],
     ["所有图像均为 2064 × 1544", streams.every(isSizeGood)],
-    ["所有图像帧率在 8–12 Hz", streams.every(isRateGood)],
+    [task.kind === "stereo" ? "所有图像帧率在 8–12 Hz" : "前端预览帧率至少 0.5 Hz",
+      streams.every(task.kind === "stereo" ? isRateGood : isMonoPreviewRateGood)],
   ];
   if (task.kind === "stereo") {
     checks.push(["左右时间戳差不超过 2 ms",

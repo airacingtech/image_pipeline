@@ -121,6 +121,26 @@ def test_stream_gate_checks_size_rate_and_stereo_sync():
     assert any('above 2 ms' in failure for failure in failures)
 
 
+def test_mono_stream_gate_accepts_one_hz_operator_preview():
+    streams = healthy_streams()
+    streams['vimba_front']['rate_hz'] = 1.0
+
+    passed, failures = stream_gate(task_for('vimba_front'), streams)
+
+    assert passed
+    assert failures == []
+
+
+def test_mono_stream_gate_rejects_stalled_preview():
+    streams = healthy_streams()
+    streams['vimba_front']['rate_hz'] = 0.2
+
+    passed, failures = stream_gate(task_for('vimba_front'), streams)
+
+    assert not passed
+    assert any('below 0.5 Hz' in failure for failure in failures)
+
+
 def test_mono_archive_summary_requires_2k_equidistant(tmp_path):
     archive_path = tmp_path / 'calibrationdata.tar.gz'
     calibration = {

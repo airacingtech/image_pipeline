@@ -66,6 +66,9 @@ ROS. Switching between Stereo, Front, Left, Right, and Rear automatically
 switches the relay, so six 2K streams are never pulled at once. For the center
 pair, use `art_stereo_capture.launch.py` as described below. For a surround
 camera, start its normal raw publisher at `2064 x 1544` and `10 Hz`.
+The monocular operator preview only requires `0.5 Hz` (approximately `1 Hz` is
+enough); the stereo capture gate remains `10 +/- 2 Hz` with a `2 ms` timestamp
+limit.
 
 For a complete five-job calibration session, run the two dedicated vehicle
 launches instead of the production all-camera launch. The fisheye launch skips

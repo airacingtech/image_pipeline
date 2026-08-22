@@ -32,6 +32,7 @@ import yaml
 EXPECTED_WIDTH = 2064
 EXPECTED_HEIGHT = 1544
 EXPECTED_RATE_HZ = 10.0
+MIN_MONO_PREVIEW_RATE_HZ = 0.5
 SESSION_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$')
 
 
@@ -620,8 +621,13 @@ def stream_gate(task: TaskSpec, streams: dict) -> tuple[bool, list[str]]:
                 f'{stream["topic"]} is {stream["width"]}x{stream["height"]}, '
                 f'expected {EXPECTED_WIDTH}x{EXPECTED_HEIGHT}')
         rate = stream['rate_hz']
-        if rate is None or abs(rate - EXPECTED_RATE_HZ) > 2.0:
-            failures.append(f'{stream["topic"]} rate is outside 10 +/- 2 Hz')
+        if task.kind == 'stereo':
+            if rate is None or abs(rate - EXPECTED_RATE_HZ) > 2.0:
+                failures.append(f'{stream["topic"]} rate is outside 10 +/- 2 Hz')
+        elif rate is None or rate < MIN_MONO_PREVIEW_RATE_HZ:
+            failures.append(
+                f'{stream["topic"]} preview rate is below '
+                f'{MIN_MONO_PREVIEW_RATE_HZ:.1f} Hz')
     if task.kind == 'stereo':
         delta = streams.get('stereo_sync_delta_ms')
         if delta is None or delta > 2.0:
