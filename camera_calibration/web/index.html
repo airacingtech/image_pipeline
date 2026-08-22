@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>ART Camera Calibration</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">A</span>
+        <div>
+          <p class="eyebrow">AIRACINGTECH</p>
+          <h1>Camera Calibration</h1>
+        </div>
+      </div>
+
+      <section class="session-panel" aria-labelledby="session-title">
+        <div class="section-heading">
+          <h2 id="session-title">本次标定</h2>
+          <span id="local-mode" class="status-pill neutral">LOCAL</span>
+        </div>
+        <label for="session-input">Session 名称</label>
+        <div class="session-row">
+          <input id="session-input" type="text" maxlength="64" autocomplete="off"
+                 spellcheck="false" aria-describedby="session-help">
+          <button id="new-session" class="icon-button" type="button"
+                  aria-label="生成新 session" title="生成新 session">↻</button>
+        </div>
+        <p id="session-help" class="microcopy">所有照片和结果只保存在 roar 本机。</p>
+      </section>
+
+      <nav class="task-nav" aria-labelledby="task-title">
+        <div class="section-heading">
+          <h2 id="task-title">标定任务</h2>
+          <span id="task-total" class="counter">0 / 5</span>
+        </div>
+        <div id="task-list" class="task-list"></div>
+      </nav>
+
+      <div class="sidebar-footer">
+        <p>板：11 × 8 方格</p>
+        <p>内角点：10 × 7 · 70 mm</p>
+        <p>输入：2064 × 1544 · 10 Hz</p>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div>
+          <p id="task-kicker" class="eyebrow">JOINT STEREO · PINHOLE</p>
+          <h2 id="task-name">Center stereo pair</h2>
+          <p id="task-description" class="subtitle"></p>
+        </div>
+        <div class="topbar-status">
+          <span id="demo-badge" class="status-pill warning" hidden>DEMO</span>
+          <span id="ros-badge" class="status-pill danger">ROS 未连接</span>
+        </div>
+      </header>
+
+      <section class="stage-rail" aria-label="标定阶段">
+        <div class="stage active" data-stage="connect"><span>01</span><strong>连接</strong></div>
+        <div class="stage" data-stage="preflight"><span>02</span><strong>预检</strong></div>
+        <div class="stage" data-stage="capture"><span>03</span><strong>采集</strong></div>
+        <div class="stage" data-stage="solve"><span>04</span><strong>求解</strong></div>
+        <div class="stage" data-stage="review"><span>05</span><strong>检查</strong></div>
+      </section>
+
+      <div class="content-grid">
+        <section class="preview-card panel" aria-labelledby="preview-title">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">LIVE VIEW</p>
+              <h3 id="preview-title">实时画面</h3>
+            </div>
+            <span id="preview-updated" class="microcopy">等待图像…</span>
+          </div>
+          <div id="preview-grid" class="preview-grid"></div>
+          <div id="stream-metrics" class="metric-row"></div>
+        </section>
+
+        <section class="guide-card panel" aria-labelledby="guide-title">
+          <div class="panel-header guide-header">
+            <div>
+              <p class="eyebrow">POSE GUIDE</p>
+              <h3 id="guide-title">拍摄位置引导</h3>
+            </div>
+            <span id="pose-count" class="pose-count">1 / 24</span>
+          </div>
+
+          <div class="pose-viewport" aria-hidden="true">
+            <div class="safe-frame"></div>
+            <div class="crosshair horizontal"></div>
+            <div class="crosshair vertical"></div>
+            <div id="pose-board" class="pose-board">
+              <span>CHECKERBOARD</span>
+            </div>
+          </div>
+
+          <div class="pose-copy">
+            <h4 id="pose-title">Center · medium</h4>
+            <p id="pose-instruction">保持整块板完整可见。</p>
+          </div>
+
+          <div id="quality-gates" class="quality-gates"></div>
+
+          <div class="pose-controls">
+            <button id="pose-prev" class="button secondary" type="button">← 上一步</button>
+            <button id="pose-done" class="button primary" type="button">标记完成</button>
+            <button id="pose-next" class="button secondary" type="button">下一步 →</button>
+          </div>
+          <div class="progress-track" aria-label="姿态完成进度">
+            <div id="pose-progress" class="progress-fill"></div>
+          </div>
+          <p id="pose-progress-copy" class="microcopy centered">已完成 0 / 24 个姿态</p>
+        </section>
+      </div>
+
+      <section class="control-panel panel" aria-labelledby="control-title">
+        <div class="panel-header control-header">
+          <div>
+            <p class="eyebrow">RUN CONTROL</p>
+            <h3 id="control-title">执行标定</h3>
+          </div>
+          <div id="process-state" class="process-state idle"><span></span>空闲</div>
+        </div>
+
+        <div class="control-grid">
+          <div class="check-column">
+            <div class="section-heading">
+              <h4>开始前检查</h4>
+              <span id="gate-summary" class="status-pill danger">未通过</span>
+            </div>
+            <div id="check-list" class="check-list"></div>
+          </div>
+
+          <div class="action-column">
+            <div id="baseline-field" class="field-group">
+              <label for="baseline-input">实测双目基线（米，可选）</label>
+              <input id="baseline-input" type="number" min="0.001" step="0.001"
+                     inputmode="decimal" placeholder="例如 0.300">
+            </div>
+            <div class="action-row">
+              <button id="preflight-action" class="button secondary" type="button">运行预检</button>
+              <button id="capture-action" class="button primary" type="button">开始自动采集</button>
+              <button id="solve-action" class="button accent" type="button">离线求解</button>
+              <button id="stop-action" class="button danger-button" type="button" disabled>停止任务</button>
+            </div>
+            <div class="output-strip">
+              <span>本地目录</span>
+              <code id="output-path">—</code>
+              <span id="capture-count" class="capture-count">0 / 60 对</span>
+            </div>
+          </div>
+        </div>
+
+        <details class="log-drawer" open>
+          <summary>运行日志 <span id="log-count">0 lines</span></summary>
+          <pre id="process-log">等待操作。</pre>
+        </details>
+      </section>
+
+      <footer class="app-footer">
+        <span>不会自动修改车上的 CameraInfo 或生产参数。</span>
+        <span>保存结果后仍需人工检查 rectified preview。</span>
+      </footer>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>

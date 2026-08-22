@@ -17,6 +17,76 @@ center-stereo session. Independently calibrating the two center cameras does not
 produce the stereo baseline and is not an acceptable replacement for the joint
 stereo workflow.
 
+## Local operator web UI on roar
+
+The recommended operator entry point is a local web application. It runs on the
+`roar` workstation, reads the ROS 2 image topics directly, and saves every
+session under `~/camera_calibration_data`. It does not upload images and it does
+not modify production CameraInfo files.
+
+After building and sourcing this package, start it on `roar`:
+
+```bash
+ros2 run camera_calibration art_calibration_ui --open-browser
+```
+
+If the browser does not open automatically, visit
+`http://127.0.0.1:8088`. The page provides:
+
+- all five jobs: one center stereo pair plus four monocular fisheye cameras;
+- live raw-image previews and topic, resolution, rate, focus, corner, and
+  stereo-synchronization indicators;
+- a fixed 24-pose board-placement guide with per-session progress;
+- guarded preflight, stereo capture, offline solve, monocular calibrator, and
+  process-stop controls;
+- live process logs and discoverable local artifact paths.
+
+The default is bound to loopback only. A different local output root can be
+selected without changing the repository:
+
+```bash
+ros2 run camera_calibration art_calibration_ui \
+  --data-root /media/roar/data1/camera_calibration \
+  --open-browser
+```
+
+To walk through the page without a vehicle or ROS image publishers, use the
+built-in synthetic preview mode. Demo mode is only a UI test and is never
+calibration evidence:
+
+```bash
+ros2 run camera_calibration art_calibration_ui --demo --open-browser
+```
+
+The vehicle-side camera launch remains a separate operation. Before using the
+page for a real session, start the required native-resolution publishers on the
+vehicle and confirm that the `roar` workstation is on the same ROS domain. For
+the center pair, use `art_stereo_capture.launch.py` as described below. For a
+surround camera, start its normal raw publisher at `2064 x 1544` and `10 Hz`.
+
+### Web UI SOP
+
+1. Start the required vehicle camera publisher and the local web UI.
+2. Enter one new session name; keep that name for the five jobs if they belong
+   to the same physical calibration campaign.
+3. Select a task and wait for every **开始前检查** row to pass.
+4. Run **预检**. For stereo, review the 10-second report. For monocular jobs,
+   the UI checks the active stream immediately.
+5. Follow the 24 indicated board poses. Hold each pose until the whole-board,
+   sharpness, and synchronization/rate chips pass, then mark it complete and
+   move on.
+6. For stereo, select **开始自动采集**. The offline-filtering capture stores up
+   to 60 diverse synchronized pairs locally; then select **离线求解**.
+7. For a fisheye camera, select **打开标定器**, finish the standard ROS
+   coverage bars, choose **CALIBRATE**, inspect the undistorted view, and choose
+   **SAVE**. The UI copies the resulting archive into the current session.
+8. Accept a job only after its report is `PASS` and its rectified or undistorted
+   preview is visually correct. Repeat for all five jobs.
+
+Stopping the web server does not erase a session. Reopening the same session
+restores artifact counts; pose checkmarks are stored in that browser profile.
+Use a new session name instead of overwriting a previous capture.
+
 ## Center pinhole stereo workflow
 
 This SOP calibrates the following synchronized stereo pair:
