@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 import json
 import os
@@ -33,6 +34,8 @@ EXPECTED_WIDTH = 2064
 EXPECTED_HEIGHT = 1544
 EXPECTED_RATE_HZ = 10.0
 MIN_MONO_PREVIEW_RATE_HZ = 0.5
+DETECTION_INTERVAL_SEC = 0.80
+STREAM_ONLINE_TIMEOUT_SEC = 4.0
 SESSION_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$')
 
 
@@ -82,6 +85,11 @@ STREAM_TOPICS = {
     'vimba_left': '/vimba_left/image',
     'vimba_right': '/vimba_right/image',
     'vimba_rear': '/vimba_rear/image',
+}
+
+PREVIEW_TOPICS = {
+    key: f'{topic.rsplit("/", 1)[0]}/calibration_preview/compressed'
+    for key, topic in STREAM_TOPICS.items()
 }
 
 RELAY_CAMERA_BY_TASK = {
@@ -319,6 +327,7 @@ class RelayManager:
         self._lock = threading.Lock()
         self._process: subprocess.Popen | None = None
         self._camera: str | None = None
+        self._publish_raw = False
         self._command: list[str] = []
         self._logs: deque[str] = deque(maxlen=80)
         self._return_code: int | None = None
@@ -335,24 +344,28 @@ class RelayManager:
             os.killpg(process.pid, signal.SIGTERM)
             process.wait(timeout=2.0)
 
-    def activate(self, task: TaskSpec) -> None:
+    def activate(self, task: TaskSpec, publish_raw: bool = False) -> None:
         if self.url is None:
             return
         camera = RELAY_CAMERA_BY_TASK[task.task_id]
         with self._lock:
             if (
                 self._camera == camera
+                and self._publish_raw == publish_raw
                 and self._process is not None
                 and self._process.poll() is None
             ):
                 return
             self._stop_locked()
             self._camera = camera
+            self._publish_raw = publish_raw
             self._return_code = None
             self._command = [
                 'ros2', 'run', 'camera_calibration', 'art_foxglove_relay',
                 '--url', self.url, '--camera', camera,
             ]
+            if publish_raw:
+                self._command.append('--publish-raw')
             self._logs.append(f'$ {command_text(self._command)}')
             try:
                 self._process = subprocess.Popen(
@@ -391,6 +404,7 @@ class RelayManager:
                 'enabled': self.url is not None,
                 'running': running,
                 'camera': self._camera,
+                'publish_raw': self._publish_raw,
                 'url': self.url,
                 'return_code': self._return_code,
                 'logs': list(self._logs),
@@ -410,7 +424,7 @@ class StreamMonitor:
                 'topic': topic,
                 'stamps': deque(maxlen=120),
                 'last_monotonic': None,
-                'last_preview_monotonic': 0.0,
+                'last_detection_monotonic': 0.0,
                 'width': None,
                 'height': None,
                 'encoding': None,
@@ -424,10 +438,13 @@ class StreamMonitor:
         self._thread: threading.Thread | None = None
         self._node = None
         self._rclpy = None
-        self._image_type = None
+        self._compressed_type = None
         self._sensor_qos = None
         self._subscriptions = {}
         self._subscription_lock = threading.Lock()
+        self._detection_pending: set[str] = set()
+        self._detection_executor = ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix='calibration-board')
         self._board = BoardSpec('checkerboard', 10, 7, 0.0700)
         if demo:
             self._seed_demo()
@@ -469,18 +486,26 @@ class StreamMonitor:
         import rclpy
         from rclpy.node import Node
         from rclpy.qos import qos_profile_sensor_data
-        from sensor_msgs.msg import Image
+        from sensor_msgs.msg import CompressedImage
 
         rclpy.init(args=None)
         self._rclpy = rclpy
         node = Node('art_calibration_ui_monitor')
         self._node = node
-        self._image_type = Image
+        self._compressed_type = CompressedImage
         self._sensor_qos = qos_profile_sensor_data
 
         def spin() -> None:
-            while rclpy.ok():
-                rclpy.spin_once(node, timeout_sec=0.1)
+            from rclpy.executors import ExternalShutdownException
+
+            try:
+                while rclpy.ok():
+                    rclpy.spin_once(node, timeout_sec=0.1)
+            except ExternalShutdownException:
+                pass
+            except Exception:
+                if rclpy.ok():
+                    raise
 
         self._thread = threading.Thread(target=spin, name='calibration-ros', daemon=True)
         self._thread.start()
@@ -498,11 +523,11 @@ class StreamMonitor:
                     record = self._records[key]
                     record['stamps'].clear()
                     record['last_monotonic'] = None
-                    record['last_preview_monotonic'] = 0.0
+                    record['last_detection_monotonic'] = 0.0
                     record['board_detected'] = False
                 self._subscriptions[key] = self._node.create_subscription(
-                    self._image_type,
-                    STREAM_TOPICS[key],
+                    self._compressed_type,
+                    PREVIEW_TOPICS[key],
                     self._callback_for(key),
                     self._sensor_qos,
                 )
@@ -515,46 +540,52 @@ class StreamMonitor:
                 record = self._records[key]
                 record['stamps'].append(stamp)
                 record['last_monotonic'] = now
-                record['width'] = int(msg.width)
-                record['height'] = int(msg.height)
-                record['encoding'] = msg.encoding
                 record['frame_id'] = msg.header.frame_id
-                if now - record['last_preview_monotonic'] < 0.45:
-                    return
-                record['last_preview_monotonic'] = now
+                dimensions = re.search(r'(\d+)x(\d+)', msg.format)
+                if dimensions is not None:
+                    record['width'] = int(dimensions.group(1))
+                    record['height'] = int(dimensions.group(2))
+                record['encoding'] = msg.format
+                record['jpeg'] = bytes(msg.data)
+                detection_due = (
+                    now - record['last_detection_monotonic']
+                    >= DETECTION_INTERVAL_SEC
+                    and key not in self._detection_pending)
+                if detection_due:
+                    record['last_detection_monotonic'] = now
+                    self._detection_pending.add(key)
 
-            try:
-                from camera_calibration.nodes.art_stereo_capture import (
-                    image_to_gray, sharpness)
-                gray = image_to_gray(msg)
-                preview_width = min(960, gray.shape[1])
-                scale = preview_width / gray.shape[1]
-                preview = cv2.resize(
-                    gray, (preview_width, int(gray.shape[0] * scale)),
-                    interpolation=cv2.INTER_AREA)
-                detection = detect_board(preview, self._board, fast=True)
-                blur = sharpness(preview)
-                color = cv2.cvtColor(preview, cv2.COLOR_GRAY2BGR)
-                if detection is not None:
-                    for point in detection.image_points:
-                        cv2.circle(color, tuple(np.rint(point).astype(int)), 3,
-                                   (74, 227, 181), -1)
-                ok, encoded = cv2.imencode(
-                    '.jpg', color, [cv2.IMWRITE_JPEG_QUALITY, 82])
-                jpeg = encoded.tobytes() if ok else None
-            except Exception:
-                detection = None
-                blur = None
-                jpeg = None
-
-            with self._lock:
-                record = self._records[key]
-                record['board_detected'] = detection is not None
-                record['sharpness'] = blur
-                if jpeg is not None:
-                    record['jpeg'] = jpeg
+            if detection_due:
+                self._detection_executor.submit(self._update_detection, key, msg)
 
         return callback
+
+    @staticmethod
+    def _preview_gray(msg):
+        encoded = np.frombuffer(msg.data, dtype=np.uint8)
+        gray = cv2.imdecode(encoded, cv2.IMREAD_GRAYSCALE)
+        if gray is None:
+            raise ValueError('compressed preview is not a readable JPEG')
+        preview_width = min(960, gray.shape[1])
+        scale = preview_width / gray.shape[1]
+        return cv2.resize(
+            gray,
+            (preview_width, int(gray.shape[0] * scale)),
+            interpolation=cv2.INTER_AREA,
+        )
+
+    def _update_detection(self, key: str, msg) -> None:
+        try:
+            from camera_calibration.nodes.art_stereo_capture import sharpness
+
+            preview = self._preview_gray(msg)
+            detection = detect_board(preview, self._board, fast=True)
+            with self._lock:
+                self._records[key]['board_detected'] = detection is not None
+                self._records[key]['sharpness'] = sharpness(preview)
+        finally:
+            with self._lock:
+                self._detection_pending.discard(key)
 
     @staticmethod
     def _rate(stamps: deque) -> float | None:
@@ -573,7 +604,8 @@ class StreamMonitor:
                     if record['last_monotonic'] is not None else None)
                 output[key] = {
                     'topic': record['topic'],
-                    'online': bool(age is not None and age < 2.0),
+                    'online': bool(
+                        age is not None and age < STREAM_ONLINE_TIMEOUT_SEC),
                     'age_sec': age,
                     'rate_hz': self._rate(record['stamps']),
                     'width': record['width'],
@@ -607,6 +639,7 @@ class StreamMonitor:
             self._node.destroy_node()
         if self._rclpy.ok():
             self._rclpy.shutdown()
+        self._detection_executor.shutdown(wait=False, cancel_futures=True)
 
 
 def stream_gate(task: TaskSpec, streams: dict) -> tuple[bool, list[str]]:
@@ -676,6 +709,18 @@ class CalibrationApp:
         self.process = ProcessManager()
         self.relay = RelayManager(None if demo else foxglove_url)
 
+    def _relay_needs_raw(self, task: TaskSpec, process: dict | None = None) -> bool:
+        process = process or self.process.snapshot()
+        if not process['running'] or not process['label']:
+            return False
+        task_id, _, action = process['label'].partition(':')
+        if task_id != task.task_id:
+            return False
+        return (
+            task.kind == 'mono' and action == 'calibrate'
+            or task.kind == 'stereo' and action in {'preflight', 'capture'}
+        )
+
     def session_status(self, task: TaskSpec, session: str) -> dict:
         paths = task_paths(self.data_root, session, task)
         paths['base'].mkdir(parents=True, exist_ok=True)
@@ -707,7 +752,8 @@ class CalibrationApp:
 
     def state(self, task_id: str, session: str) -> dict:
         task = task_for(task_id)
-        self.relay.activate(task)
+        process = self.process.snapshot()
+        self.relay.activate(task, publish_raw=self._relay_needs_raw(task, process))
         self.monitor.activate(task.stream_keys)
         streams = self.monitor.snapshot()
         gate_ok, gate_failures = stream_gate(task, streams)
@@ -725,7 +771,7 @@ class CalibrationApp:
             'streams': streams,
             'stream_gate': {'pass': gate_ok, 'failures': gate_failures},
             'session': self.session_status(task, session),
-            'process': self.process.snapshot(),
+            'process': process,
             'transport': self.relay.snapshot(),
             'data_root': str(self.data_root),
         }
@@ -737,7 +783,11 @@ class CalibrationApp:
         paths = task_paths(self.data_root, session, task)
         paths['base'].mkdir(parents=True, exist_ok=True)
 
-        self.relay.activate(task)
+        publish_raw = (
+            task.kind == 'mono' and action == 'calibrate'
+            or task.kind == 'stereo' and action in {'preflight', 'capture'}
+        )
+        self.relay.activate(task, publish_raw=publish_raw)
         self.monitor.activate(task.stream_keys)
         streams = self.monitor.snapshot()
         gate_ok, failures = stream_gate(task, streams)

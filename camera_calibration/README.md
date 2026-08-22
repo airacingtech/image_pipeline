@@ -69,6 +69,17 @@ camera, start its normal raw publisher at `2064 x 1544` and `10 Hz`.
 The monocular operator preview only requires `0.5 Hz` (approximately `1 Hz` is
 enough); the stereo capture gate remains `10 +/- 2 Hz` with a `2 ms` timestamp
 limit.
+The browser refreshes the latest preview at up to `4 FPS`. Corner detection runs
+on separate workers, so it cannot block ROS image reception or preview updates.
+The UI marks a stream offline only after four seconds without a frame, avoiding
+false disconnect indications during short 2K WebSocket delivery gaps.
+Idle live view uses a local JPEG preview topic to avoid serializing each 3.2 MB
+raw frame through local DDS a second time. The managed relay additionally
+publishes lossless raw topics only while stereo preflight/capture or the
+monocular calibrator is running.
+Preview JPEGs are downscaled to a 960-pixel long edge for responsive display;
+the source dimensions reported by the preflight and every saved raw frame stay
+at `2064 x 1544`.
 
 For a complete five-job calibration session, run the two dedicated vehicle
 launches instead of the production all-camera launch. The fisheye launch skips

@@ -495,7 +495,7 @@ async function boot() {
   if (!app.state) return;
   render();
   app.refreshTimer = setInterval(() => fetchState({ quiet: true }), 1000);
-  app.frameTimer = setInterval(refreshFrames, 700);
+  app.frameTimer = setInterval(refreshFrames, 250);
 }
 
 boot();

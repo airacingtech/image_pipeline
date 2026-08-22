@@ -15,6 +15,7 @@ from camera_calibration.nodes.art_calibration_ui import (
     EXPECTED_WIDTH,
     make_handler,
     mono_archive_summary,
+    PREVIEW_TOPICS,
     RELAY_CAMERA_BY_TASK,
     stream_gate,
     STREAM_TOPICS,
@@ -59,6 +60,8 @@ def test_task_contract_has_one_stereo_pair_and_four_fisheye_cameras():
     assert all(task.model == 'fisheye' for task in mono)
     assert set(RELAY_CAMERA_BY_TASK) == {task.task_id for task in TASKS}
     assert RELAY_CAMERA_BY_TASK['vimba_rear'] == 'rear'
+    assert PREVIEW_TOPICS['vimba_front'] == (
+        '/vimba_front/calibration_preview/compressed')
 
 
 @pytest.mark.parametrize('session', ['20260822_120000', 'track-day.1', 'A_b-c'])

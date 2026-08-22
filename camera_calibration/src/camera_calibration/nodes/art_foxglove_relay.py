@@ -11,15 +11,18 @@ import sys
 import threading
 import time
 
+import cv2
+import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.serialization import deserialize_message
-from sensor_msgs.msg import CameraInfo, Image
+from sensor_msgs.msg import CameraInfo, CompressedImage, Image
 import websocket
 
 
 SUBPROTOCOL = 'foxglove.sdk.v1'
+PREVIEW_INTERVAL_SEC = 0.18
 
 CAMERA_TOPICS = {
     'stereo': (
@@ -57,21 +60,33 @@ def parse_message_frame(frame: bytes) -> tuple[int, int, bytes]:
 
 
 class FoxgloveRelay(Node):
-    def __init__(self, url: str, camera: str):
+    def __init__(self, url: str, camera: str, publish_raw: bool = False):
         super().__init__('art_foxglove_camera_relay')
         self.url = url
         self.camera = camera
+        self.publish_raw = publish_raw
         self.routes = {
             source: {
                 'destination': destination,
                 'message_type': message_type,
-                'publisher': self.create_publisher(
-                    message_type, destination, qos_profile_sensor_data),
+                'publisher': (
+                    self.create_publisher(
+                        message_type, destination, qos_profile_sensor_data)
+                    if message_type is CameraInfo or publish_raw else None),
+                'preview_publisher': (
+                    self.create_publisher(
+                        CompressedImage,
+                        f'{destination.rsplit("/", 1)[0]}'
+                        '/calibration_preview/compressed',
+                        qos_profile_sensor_data,
+                    )
+                    if message_type is Image else None),
             }
             for source, destination, message_type in CAMERA_TOPICS[camera]
         }
         self.message_counts = defaultdict(int)
         self._count_lock = threading.Lock()
+        self._last_preview_monotonic = defaultdict(float)
 
     def _subscribe_advertisements(
         self,
@@ -138,7 +153,14 @@ class FoxgloveRelay(Node):
             return
         route = self.routes[source]
         message = deserialize_message(payload, route['message_type'])
-        route['publisher'].publish(message)
+        if route['publisher'] is not None:
+            route['publisher'].publish(message)
+        if isinstance(message, Image):
+            now = time.monotonic()
+            if now - self._last_preview_monotonic[source] >= PREVIEW_INTERVAL_SEC:
+                preview = self._compress_preview(message)
+                route['preview_publisher'].publish(preview)
+                self._last_preview_monotonic[source] = now
         with self._count_lock:
             self.message_counts[source] += 1
             count = self.message_counts[source]
@@ -149,6 +171,31 @@ class FoxgloveRelay(Node):
                 detail = f'{message.width}x{message.height} CameraInfo'
             self.get_logger().info(
                 f'relaying {source} -> {route["destination"]}: {detail}')
+
+    @staticmethod
+    def _compress_preview(message: Image) -> CompressedImage:
+        image = np.frombuffer(message.data, dtype=np.uint8)
+        image = image.reshape((message.height, message.step))[:, :message.width]
+        preview_width = min(960, message.width)
+        scale = preview_width / message.width
+        preview_height = max(1, int(round(message.height * scale)))
+        if (preview_width, preview_height) != (message.width, message.height):
+            image = cv2.resize(
+                image,
+                (preview_width, preview_height),
+                interpolation=cv2.INTER_AREA,
+            )
+        ok, encoded = cv2.imencode(
+            '.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 72])
+        if not ok:
+            raise RuntimeError('failed to encode calibration preview JPEG')
+        preview = CompressedImage()
+        preview.header = message.header
+        preview.format = (
+            f'jpeg; mono8; source={message.width}x{message.height}; '
+            f'preview={preview_width}x{preview_height}')
+        preview.data = encoded.tobytes()
+        return preview
 
     def _run_route(self, source: str) -> None:
         while rclpy.ok():
@@ -208,13 +255,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description='Relay ART camera CDR messages from the vehicle Foxglove Bridge.')
     parser.add_argument('--url', default='ws://10.42.27.200:8765/')
     parser.add_argument('--camera', choices=sorted(CAMERA_TOPICS), default='stereo')
+    parser.add_argument(
+        '--publish-raw', action='store_true',
+        help='also publish full raw Image topics for capture/calibration actions')
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     rclpy.init(args=None)
-    node = FoxgloveRelay(args.url, args.camera)
+    node = FoxgloveRelay(args.url, args.camera, publish_raw=args.publish_raw)
     try:
         node.run()
     finally:
