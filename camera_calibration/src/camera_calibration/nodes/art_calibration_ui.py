@@ -9,10 +9,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shlex
-import shutil
 import signal
 import subprocess
 import sys
@@ -37,6 +36,17 @@ MIN_MONO_PREVIEW_RATE_HZ = 0.5
 DETECTION_INTERVAL_SEC = 0.80
 STREAM_ONLINE_TIMEOUT_SEC = 4.0
 SESSION_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$')
+VEHICLE_ROS_SETUP = (
+    'source /opt/ros/jazzy/setup.bash',
+    'source /home/autera-admin/ART/race_common/install/setup.bash',
+    'source /home/autera-admin/ART/image_pipeline/install/setup.bash',
+    'export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp',
+    'export CYCLONEDDS_URI=file:///home/autera-admin/ART/race_common/'
+    'tools/cyclone_dds_configs/cyclonedds.xml',
+    'export PYTHONUNBUFFERED=1',
+    'export DISPLAY=${DISPLAY:-:0}',
+    'export XAUTHORITY=${XAUTHORITY:-/run/user/1000/gdm/Xauthority}',
+)
 
 
 @dataclass(frozen=True)
@@ -199,7 +209,127 @@ def task_paths(data_root: Path, session: str, task: TaskSpec) -> dict[str, Path]
         'result': base / 'result',
         'preflight': base / 'preflight.json',
         'mono_archive': base / 'calibrationdata.tar.gz',
+        'mono_progress': base / 'progress.json',
+        'stereo_progress': base / 'progress.json',
     }
+
+
+def vehicle_task_paths(
+    vehicle_root: PurePosixPath,
+    session: str,
+    task: TaskSpec,
+) -> dict[str, PurePosixPath]:
+    base = vehicle_root / validate_session_name(session) / task.task_id
+    return {
+        'base': base,
+        'capture': base / 'capture',
+        'result': base / 'result',
+        'mono_archive': base / 'calibrationdata.tar.gz',
+        'mono_progress': base / 'progress.json',
+        'stereo_progress': base / 'progress.json',
+    }
+
+
+def build_vehicle_mono_command(
+    task: TaskSpec,
+    remote_paths: dict[str, PurePosixPath],
+    ssh_target: str,
+    ssh_control_path: str | None = None,
+) -> list[str]:
+    if task.kind != 'mono':
+        raise ValueError('vehicle automatic command is only valid for mono tasks')
+    remote_command = [
+        'ros2', 'run', 'camera_calibration', 'art_camera_calibrator',
+        task.camera_names[0],
+        '--image-topic', STREAM_TOPICS[task.stream_keys[0]],
+        '--auto-save', str(remote_paths['mono_archive']),
+        '--auto-progress', str(remote_paths['mono_progress']),
+        '--auto-exit',
+    ]
+    script = ' && '.join([
+        *VEHICLE_ROS_SETUP,
+        f'test ! -e {shlex.quote(str(remote_paths["base"]))}',
+        f'mkdir -p {shlex.quote(str(remote_paths["base"]))}',
+        f'exec {shlex.join(remote_command)}',
+    ])
+    command = [
+        'ssh', '-tt', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
+    ]
+    if ssh_control_path:
+        command.extend(['-S', ssh_control_path])
+    command.extend([ssh_target, 'bash', '-lc', shlex.quote(script)])
+    return command
+
+
+def build_vehicle_stereo_auto_command(
+    task: TaskSpec,
+    remote_paths: dict[str, PurePosixPath],
+    ssh_target: str,
+    expected_baseline_m: float | None = None,
+    ssh_control_path: str | None = None,
+) -> list[str]:
+    if task.kind != 'stereo':
+        raise ValueError('vehicle stereo command is only valid for stereo tasks')
+    remote_command = [
+        'ros2', 'run', 'camera_calibration', 'art_stereo_auto',
+        '--output', str(remote_paths['base']),
+        '--left-topic', STREAM_TOPICS[task.stream_keys[0]],
+        '--right-topic', STREAM_TOPICS[task.stream_keys[1]],
+        '--max-pairs', str(task.target_captures),
+        '--max-delta-ms', '2.0',
+        '--min-interval-sec', '1.0',
+        '--min-novelty', '0.025',
+        '--expected-width', str(EXPECTED_WIDTH),
+        '--expected-height', str(EXPECTED_HEIGHT),
+    ]
+    if expected_baseline_m is not None:
+        remote_command.extend([
+            '--expected-baseline-m', f'{expected_baseline_m:.9g}'])
+    script = ' && '.join([
+        *VEHICLE_ROS_SETUP,
+        f'mkdir -p {shlex.quote(str(remote_paths["base"].parent))}',
+        f'test ! -e {shlex.quote(str(remote_paths["base"]))}',
+        f'exec {shlex.join(remote_command)}',
+    ])
+    command = [
+        'ssh', '-tt', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
+    ]
+    if ssh_control_path:
+        command.extend(['-S', ssh_control_path])
+    command.extend([ssh_target, 'bash', '-lc', shlex.quote(script)])
+    return command
+
+
+def copy_vehicle_file(
+    ssh_target: str,
+    ssh_control_path: str | None,
+    remote_path: PurePosixPath,
+    local_path: Path,
+) -> None:
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        'scp', '-q', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
+    ]
+    if ssh_control_path:
+        command.extend(['-o', f'ControlPath={ssh_control_path}'])
+    command.extend([f'{ssh_target}:{remote_path}', str(local_path)])
+    subprocess.run(command, check=True, timeout=120)
+
+
+def copy_vehicle_tree(
+    ssh_target: str,
+    ssh_control_path: str | None,
+    remote_path: PurePosixPath,
+    local_parent: Path,
+) -> None:
+    local_parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        'scp', '-q', '-r', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
+    ]
+    if ssh_control_path:
+        command.extend(['-o', f'ControlPath={ssh_control_path}'])
+    command.extend([f'{ssh_target}:{remote_path}', str(local_parent)])
+    subprocess.run(command, check=True, timeout=600)
 
 
 def build_action_command(
@@ -251,6 +381,7 @@ class ProcessManager:
         self._command: list[str] = []
         self._logs: deque[str] = deque(maxlen=240)
         self._return_code: int | None = None
+        self._postprocessing = False
 
     def start(
         self,
@@ -259,7 +390,9 @@ class ProcessManager:
         on_exit: Callable[[int, float], None] | None = None,
     ) -> None:
         with self._lock:
-            if self._process is not None and self._process.poll() is None:
+            if self._postprocessing or (
+                self._process is not None and self._process.poll() is None
+            ):
                 raise RuntimeError(f'{self._label} is already running')
             started_at = time.time()
             self._label = label
@@ -267,6 +400,7 @@ class ProcessManager:
             self._logs.clear()
             self._logs.append(f'$ {command_text(command)}')
             self._return_code = None
+            self._postprocessing = False
             self._process = subprocess.Popen(
                 command,
                 stdout=subprocess.PIPE,
@@ -284,14 +418,23 @@ class ProcessManager:
                     self._logs.append(line.rstrip())
             return_code = process.wait()
             with self._lock:
-                self._return_code = return_code
                 self._logs.append(f'process exited with code {return_code}')
+                self._postprocessing = on_exit is not None
             if on_exit is not None:
                 try:
+                    with self._lock:
+                        self._logs.append('copying calibration artifacts to roar')
                     on_exit(return_code, started_at)
+                    with self._lock:
+                        self._logs.append('artifact copy complete')
                 except Exception as exc:  # pragma: no cover - defensive logging
                     with self._lock:
                         self._logs.append(f'post-process error: {exc}')
+                        if return_code == 0:
+                            return_code = 74
+            with self._lock:
+                self._return_code = return_code
+                self._postprocessing = False
 
         threading.Thread(target=consume, name='calibration-process-log', daemon=True).start()
 
@@ -306,7 +449,8 @@ class ProcessManager:
 
     def snapshot(self) -> dict:
         with self._lock:
-            running = self._process is not None and self._process.poll() is None
+            running = self._postprocessing or (
+                self._process is not None and self._process.poll() is None)
             return {
                 'running': running,
                 'label': self._label,
@@ -722,10 +866,21 @@ class CalibrationApp:
         data_root: Path,
         demo: bool,
         foxglove_url: str | None = None,
+        vehicle_ssh: str = 'autera-admin@10.42.27.200',
+        ssh_control_path: str | None = None,
+        vehicle_calibration_root: str = (
+            '/home/autera-admin/ART/camera_calibration_sessions'),
     ):
         self.assets_dir = assets_dir
         self.data_root = data_root.expanduser().resolve()
         self.demo = demo
+        self.vehicle_ssh = vehicle_ssh
+        self.ssh_control_path = ssh_control_path
+        self.vehicle_calibration_root = PurePosixPath(vehicle_calibration_root)
+        if not self.vehicle_calibration_root.is_absolute():
+            raise ValueError('vehicle calibration root must be absolute')
+        if '..' in self.vehicle_calibration_root.parts:
+            raise ValueError('vehicle calibration root must not contain ..')
         self.monitor = StreamMonitor(demo=demo)
         self.process = ProcessManager()
         self.relay = RelayManager(None if demo else foxglove_url)
@@ -737,10 +892,7 @@ class CalibrationApp:
         task_id, _, action = process['label'].partition(':')
         if task_id != task.task_id:
             return False
-        return (
-            task.kind == 'mono' and action == 'calibrate'
-            or task.kind == 'stereo' and action in {'preflight', 'capture'}
-        )
+        return task.kind == 'stereo' and action in {'preflight', 'capture'}
 
     def session_status(self, task: TaskSpec, session: str) -> dict:
         paths = task_paths(self.data_root, session, task)
@@ -769,6 +921,21 @@ class CalibrationApp:
                 status['result'] = {'overall': 'INVALID'}
         if task.kind == 'mono':
             status['mono_archive'] = mono_archive_summary(paths['mono_archive'])
+            if paths['mono_progress'].is_file():
+                try:
+                    progress = json.loads(paths['mono_progress'].read_text())
+                    status['capture_count'] = int(progress.get('samples', 0))
+                    status['auto_status'] = progress.get('status')
+                except (OSError, ValueError, json.JSONDecodeError):
+                    status['auto_status'] = 'INVALID'
+        elif paths['stereo_progress'].is_file():
+            try:
+                progress = json.loads(paths['stereo_progress'].read_text())
+                status['capture_count'] = max(
+                    status['capture_count'], int(progress.get('samples', 0)))
+                status['auto_status'] = progress.get('status')
+            except (OSError, ValueError, json.JSONDecodeError):
+                status['auto_status'] = 'INVALID'
         return status
 
     def state(self, task_id: str, session: str) -> dict:
@@ -778,6 +945,28 @@ class CalibrationApp:
         self.monitor.activate(task.stream_keys)
         streams = self.monitor.snapshot()
         gate_ok, gate_failures = stream_gate(task, streams)
+        session_status = self.session_status(task, session)
+        if task.kind == 'mono' and process['label'] == f'{task.task_id}:calibrate':
+            for line in process['logs']:
+                match = re.search(r'Added sample (\d+)', line)
+                if match:
+                    session_status['capture_count'] = max(
+                        session_status['capture_count'], int(match.group(1)))
+            if process['running']:
+                session_status['auto_status'] = (
+                    'calibrating'
+                    if any('calibrating and saving automatically' in line
+                           for line in process['logs'])
+                    else 'collecting')
+        elif task.kind == 'stereo' and process['label'] == f'{task.task_id}:auto':
+            for line in process['logs']:
+                match = re.search(r'saved filtered pair (\d+)', line)
+                if match:
+                    session_status['capture_count'] = max(
+                        session_status['capture_count'], int(match.group(1)) + 1)
+                stage = re.search(r'ART_STEREO_STAGE=([a-z_]+)', line)
+                if stage:
+                    session_status['auto_status'] = stage.group(1)
         return {
             'demo': self.demo,
             'expected': {
@@ -791,7 +980,7 @@ class CalibrationApp:
             'selected_task': asdict(task),
             'streams': streams,
             'stream_gate': {'pass': gate_ok, 'failures': gate_failures},
-            'session': self.session_status(task, session),
+            'session': session_status,
             'process': process,
             'transport': self.relay.snapshot(),
             'data_root': str(self.data_root),
@@ -804,17 +993,14 @@ class CalibrationApp:
         paths = task_paths(self.data_root, session, task)
         paths['base'].mkdir(parents=True, exist_ok=True)
 
-        publish_raw = (
-            task.kind == 'mono' and action == 'calibrate'
-            or task.kind == 'stereo' and action in {'preflight', 'capture'}
-        )
+        publish_raw = task.kind == 'stereo' and action in {'preflight', 'capture'}
         self.relay.activate(task, publish_raw=publish_raw)
         self.monitor.activate(task.stream_keys)
         streams = self.monitor.snapshot()
         gate_ok, failures = stream_gate(task, streams)
         if action in {'capture', 'calibrate'} and task.kind == 'mono' and not gate_ok:
             raise RuntimeError('; '.join(failures))
-        if action == 'capture' and task.kind == 'stereo' and not gate_ok:
+        if action in {'capture', 'auto'} and task.kind == 'stereo' and not gate_ok:
             raise RuntimeError('; '.join(failures))
 
         if action == 'preflight' and task.kind == 'mono':
@@ -830,29 +1016,102 @@ class CalibrationApp:
             if baseline_value <= 0:
                 raise ValueError('expected baseline must be positive')
 
-        if action == 'capture' and paths['capture'].exists() and any(paths['capture'].iterdir()):
+        if (
+            action in {'capture', 'auto'}
+            and paths['capture'].exists()
+            and any(paths['capture'].iterdir())
+        ):
             raise RuntimeError('capture directory is not empty; choose a new session')
-        if action == 'calibrate' and task.kind == 'stereo':
-            if not (paths['capture'] / 'pairs.csv').is_file():
+        if action in {'calibrate', 'auto'} and task.kind == 'stereo':
+            if action == 'calibrate' and not (paths['capture'] / 'pairs.csv').is_file():
                 raise RuntimeError('no stereo capture manifest exists for this session')
             if paths['result'].exists() and any(paths['result'].iterdir()):
                 raise RuntimeError('result directory is not empty; choose a new session')
+        if (
+            action == 'calibrate'
+            and task.kind == 'mono'
+            and paths['mono_archive'].exists()
+        ):
+            raise RuntimeError('mono archive already exists; choose a new session')
 
-        command = build_action_command(action, task, paths, baseline_value)
+        remote_paths = None
+        if action == 'calibrate' and task.kind == 'mono':
+            remote_paths = vehicle_task_paths(
+                self.vehicle_calibration_root, session, task)
+            command = build_vehicle_mono_command(
+                task,
+                remote_paths,
+                self.vehicle_ssh,
+                self.ssh_control_path,
+            )
+        elif action == 'auto' and task.kind == 'stereo':
+            remote_paths = vehicle_task_paths(
+                self.vehicle_calibration_root, session, task)
+            command = build_vehicle_stereo_auto_command(
+                task,
+                remote_paths,
+                self.vehicle_ssh,
+                baseline_value,
+                self.ssh_control_path,
+            )
+        else:
+            command = build_action_command(action, task, paths, baseline_value)
         on_exit = None
         if action == 'calibrate' and task.kind == 'mono':
-            source_archive = Path('/tmp/calibrationdata.tar.gz')
+            assert remote_paths is not None
 
             def save_mono_archive(return_code: int, started_at: float) -> None:
-                if (
-                    return_code == 0
-                    and source_archive.is_file()
-                    and source_archive.stat().st_mtime >= started_at - 1.0
-                ):
-                    paths['base'].mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(source_archive, paths['mono_archive'])
+                del started_at
+                try:
+                    copy_vehicle_file(
+                        self.vehicle_ssh,
+                        self.ssh_control_path,
+                        remote_paths['mono_progress'],
+                        paths['mono_progress'],
+                    )
+                except subprocess.CalledProcessError:
+                    if return_code == 0:
+                        raise
+                if return_code == 0:
+                    copy_vehicle_file(
+                        self.vehicle_ssh,
+                        self.ssh_control_path,
+                        remote_paths['mono_archive'],
+                        paths['mono_archive'],
+                    )
 
             on_exit = save_mono_archive
+        elif action == 'auto' and task.kind == 'stereo':
+            assert remote_paths is not None
+
+            def save_stereo_artifacts(return_code: int, started_at: float) -> None:
+                del started_at
+                errors = []
+                try:
+                    copy_vehicle_file(
+                        self.vehicle_ssh,
+                        self.ssh_control_path,
+                        remote_paths['stereo_progress'],
+                        paths['stereo_progress'],
+                    )
+                except subprocess.CalledProcessError as exc:
+                    errors.append(f'progress: {exc}')
+                for key in ('capture', 'result'):
+                    try:
+                        copy_vehicle_tree(
+                            self.vehicle_ssh,
+                            self.ssh_control_path,
+                            remote_paths[key],
+                            paths['base'],
+                        )
+                    except subprocess.CalledProcessError as exc:
+                        errors.append(f'{key}: {exc}')
+                if errors:
+                    outcome = 'successful run' if return_code == 0 else 'failed run'
+                    raise RuntimeError(
+                        f'artifact copy after {outcome}: ' + '; '.join(errors))
+
+            on_exit = save_stereo_artifacts
 
         self.process.start(f'{task.task_id}:{action}', command, on_exit=on_exit)
         return {'started': True, 'command': command_text(command)}
@@ -962,6 +1221,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         '--direct-ros', action='store_true',
         help='disable the managed Foxglove relay and subscribe to local ROS topics directly')
+    parser.add_argument(
+        '--vehicle-ssh', default='autera-admin@10.42.27.200',
+        help='SSH target used to run monocular calibration on the vehicle')
+    parser.add_argument(
+        '--ssh-control-path',
+        help='optional existing OpenSSH ControlMaster socket')
+    parser.add_argument(
+        '--vehicle-calibration-root',
+        default='/home/autera-admin/ART/camera_calibration_sessions',
+        help='absolute vehicle directory for automatic calibration artifacts')
     parser.add_argument('--open-browser', action='store_true')
     parser.add_argument('--assets-dir', help=argparse.SUPPRESS)
     return parser.parse_args(argv)
@@ -985,6 +1254,9 @@ def main(argv: list[str] | None = None) -> int:
         Path(args.data_root),
         demo=args.demo,
         foxglove_url=None if args.direct_ros else args.foxglove_url,
+        vehicle_ssh=args.vehicle_ssh,
+        ssh_control_path=args.ssh_control_path,
+        vehicle_calibration_root=args.vehicle_calibration_root,
     )
     server = ThreadingHTTPServer((args.host, args.port), make_handler(app))
     url = f'http://{args.host}:{server.server_address[1]}'

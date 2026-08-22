@@ -34,6 +34,10 @@ def camera_model(camera_name: str) -> str:
 def build_cameracalibrator_args(
     camera_name: str,
     image_topic: str | None = None,
+    auto_save: str | None = None,
+    auto_progress: str | None = None,
+    auto_exit: bool = False,
+    headless: bool = False,
 ) -> list[str]:
     model = camera_model(camera_name)
     topic = image_topic or f'/{camera_name}/image'
@@ -48,7 +52,18 @@ def build_cameracalibrator_args(
             '--fisheye-fix-skew',
         ])
 
+    if auto_save:
+        arguments.extend(['--auto-save', auto_save])
+    if auto_progress:
+        arguments.extend(['--auto-progress', auto_progress])
+    if auto_exit:
+        arguments.append('--auto-exit')
+    if headless:
+        arguments.append('--headless')
+
     arguments.extend([
+        '--expected-width', '2064',
+        '--expected-height', '1544',
         '--camera_name', camera_name,
         '--size', '7x10',
         '--square', '0.0700',
@@ -72,14 +87,39 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action='store_true',
         help='Print the resolved cameracalibrator command without running it.',
     )
+    parser.add_argument(
+        '--auto-save', metavar='ARCHIVE',
+        help='Automatically solve and save when pose coverage is sufficient.',
+    )
+    parser.add_argument(
+        '--auto-progress', metavar='JSON',
+        help='Write sample count and automatic calibration state to JSON.',
+    )
+    parser.add_argument(
+        '--auto-exit', action='store_true',
+        help='Exit after the automatic archive is saved.',
+    )
+    parser.add_argument(
+        '--headless', action='store_true',
+        help='Run without an OpenCV window; requires --auto-save.',
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if (args.auto_progress or args.auto_exit or args.headless) and not args.auto_save:
+        raise SystemExit(
+            '--auto-progress, --auto-exit, and --headless require --auto-save')
     try:
         calibrator_args = build_cameracalibrator_args(
-            args.camera_name, args.image_topic)
+            args.camera_name,
+            args.image_topic,
+            auto_save=args.auto_save,
+            auto_progress=args.auto_progress,
+            auto_exit=args.auto_exit,
+            headless=args.headless,
+        )
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 

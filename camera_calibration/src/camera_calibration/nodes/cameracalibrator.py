@@ -137,7 +137,37 @@ def main():
                      than this speed in px/frame. Set to eg. 0.5 for rolling shutter cameras.")
 
     parser.add_option_group(group)
+    group = OptionGroup(parser, "Automatic Calibration Options")
+    group.add_option(
+        "--auto-save", type="string", default=None, metavar="ARCHIVE",
+        help="automatically calibrate when coverage is sufficient and save the archive")
+    group.add_option(
+        "--auto-progress", type="string", default=None, metavar="JSON",
+        help="atomically write automatic collection progress to this JSON file")
+    group.add_option(
+        "--auto-exit", action="store_true", default=False,
+        help="exit after --auto-save succeeds")
+    group.add_option(
+        "--headless", action="store_true", default=False,
+        help="run without the OpenCV window; requires --auto-save")
+    group.add_option(
+        "--expected-width", type="int", default=None, metavar="PIXELS",
+        help="abort if the input width does not match")
+    group.add_option(
+        "--expected-height", type="int", default=None, metavar="PIXELS",
+        help="abort if the input height does not match")
+    parser.add_option_group(group)
     options, _ = parser.parse_args(rclpy.utilities.remove_ros_args())
+
+    if (options.auto_progress or options.auto_exit or options.headless) and not options.auto_save:
+        parser.error("--auto-progress, --auto-exit, and --headless require --auto-save")
+    if (options.expected_width is None) != (options.expected_height is None):
+        parser.error("--expected-width and --expected-height must be used together")
+    expected_size = None
+    if options.expected_width is not None:
+        if options.expected_width <= 0 or options.expected_height <= 0:
+            parser.error("expected image dimensions must be positive")
+        expected_size = (options.expected_width, options.expected_height)
 
     if options.pattern == "charuco" and options.camera_model == "fisheye":
         parser.error("Fisheye calibration with a ChArUco board is not supported")
@@ -229,10 +259,18 @@ def main():
                                  calib_flags, fisheye_calib_flags, pattern, options.camera_name,
                                  checkerboard_flags=checkerboard_flags, max_chessboard_speed=options.max_chessboard_speed,
                                  queue_size=options.queue_size,
+                                 auto_save_path=options.auto_save,
+                                 auto_progress_path=options.auto_progress,
+                                 auto_exit=options.auto_exit,
+                                 headless=options.headless,
+                                 expected_size=expected_size,
                                  camera_model=(CAMERA_MODEL.FISHEYE if options.camera_model == "fisheye"
                                                else CAMERA_MODEL.PINHOLE))
     node.spin()
-    rclpy.shutdown()
+    if node._fatal_error:
+        raise RuntimeError(node._fatal_error)
+    if rclpy.ok():
+        rclpy.shutdown()
 
 if __name__ == "__main__":
     try:

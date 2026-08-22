@@ -162,6 +162,10 @@ class StereoCapture(Node):
         self.counters: Counter[str] = Counter()
         self.rows: list[dict] = []
         self.done = False
+        self.fatal_error: str | None = None
+        self.user_stopped = False
+        self.preview: np.ndarray | None = None
+        self.preview_status = 'Waiting for synchronized images'
 
         self.left_sub = message_filters.Subscriber(
             self, Image, args.left_topic, qos_profile=qos_profile_sensor_data)
@@ -193,6 +197,16 @@ class StereoCapture(Node):
             'reject_counts': dict(sorted(self.counters.items())),
             'max_delta_ms': self.args.max_delta_ms,
             'min_blur': self.args.min_blur,
+            'expected_image_size': {
+                'width': self.args.expected_width,
+                'height': self.args.expected_height,
+            },
+            'status': (
+                'failed' if self.fatal_error
+                else 'stopped' if self.user_stopped
+                else 'complete' if self.saved >= self.args.max_pairs
+                else 'incomplete'),
+            'error': self.fatal_error,
         }
         if self.signatures:
             summary['capture_coverage'] = {
@@ -205,6 +219,53 @@ class StereoCapture(Node):
             }
         (self.output / 'capture_summary.json').write_text(
             json.dumps(summary, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+
+    def _update_preview(
+        self,
+        left_gray: np.ndarray,
+        right_gray: np.ndarray,
+        left_detection: Detection | None,
+        right_detection: Detection | None,
+        status: str,
+    ) -> None:
+        if not self.args.show_window:
+            return
+        target_height = min(left_gray.shape[0], 620)
+        scale = target_height / left_gray.shape[0]
+        target_width = max(1, int(round(left_gray.shape[1] * scale)))
+        size = (target_width, target_height)
+        views = []
+        for gray, detection in (
+            (left_gray, left_detection), (right_gray, right_detection)
+        ):
+            view = cv2.cvtColor(
+                cv2.resize(gray, size, interpolation=cv2.INTER_AREA),
+                cv2.COLOR_GRAY2BGR,
+            )
+            if detection is not None:
+                corners = detection.image_points.reshape(-1, 1, 2).copy()
+                corners *= scale
+                cv2.drawChessboardCorners(
+                    view,
+                    (self.board.columns, self.board.rows),
+                    corners,
+                    True,
+                )
+            views.append(view)
+        canvas = np.hstack(views)
+        cv2.rectangle(canvas, (0, 0), (canvas.shape[1], 42), (0, 0, 0), -1)
+        cv2.putText(
+            canvas,
+            f'Accepted {self.saved}/{self.args.max_pairs} | {status}',
+            (14, 29),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.75,
+            (80, 255, 80),
+            2,
+            cv2.LINE_AA,
+        )
+        self.preview_status = status
+        self.preview = canvas
 
     def _callback(self, left_msg: Image, right_msg: Image) -> None:
         if self.done:
@@ -235,9 +296,31 @@ class StereoCapture(Node):
 
         if left_gray.shape != right_gray.shape:
             self.counters['shape_mismatch'] += 1
+            self.fatal_error = (
+                f'left/right image shapes differ: {left_gray.shape} vs '
+                f'{right_gray.shape}; capture aborted')
+            self.get_logger().error(self.fatal_error)
+            self._update_preview(
+                left_gray, right_gray, None, None, 'LEFT/RIGHT SIZE MISMATCH')
+            self.done = True
+            return
+
+        actual_height, actual_width = left_gray.shape
+        expected_size = (self.args.expected_width, self.args.expected_height)
+        if (actual_width, actual_height) != expected_size:
+            self.fatal_error = (
+                f'image size is {actual_width}x{actual_height}; expected '
+                f'{expected_size[0]}x{expected_size[1]}; capture aborted')
+            self.counters['unexpected_image_size'] += 1
+            self.get_logger().error(self.fatal_error)
+            self._update_preview(
+                left_gray, right_gray, None, None, 'WRONG IMAGE SIZE')
+            self.done = True
             return
 
         signature = None
+        left_detection = None
+        right_detection = None
         left_blur: float | str = ''
         right_blur: float | str = ''
         if self.args.mode == 'online-filter':
@@ -245,12 +328,21 @@ class StereoCapture(Node):
             right_blur = sharpness(right_gray)
             if min(left_blur, right_blur) < self.args.min_blur:
                 self.counters['blur'] += 1
+                self._update_preview(
+                    left_gray, right_gray, None, None, 'HOLD STILL - BLUR')
                 return
 
             left_detection = detect_board(left_gray, self.board, fast=True)
             right_detection = detect_board(right_gray, self.board, fast=True)
             if left_detection is None or right_detection is None:
                 self.counters['board_not_in_both'] += 1
+                self._update_preview(
+                    left_gray,
+                    right_gray,
+                    left_detection,
+                    right_detection,
+                    'BOARD MUST BE VISIBLE IN BOTH',
+                )
                 return
 
             height, width = left_gray.shape
@@ -259,6 +351,13 @@ class StereoCapture(Node):
                 novelty = min(float(np.linalg.norm(signature - old)) for old in self.signatures)
                 if novelty < self.args.min_novelty:
                     self.counters['duplicate_pose'] += 1
+                    self._update_preview(
+                        left_gray,
+                        right_gray,
+                        left_detection,
+                        right_detection,
+                        'MOVE TO A DIFFERENT POSE',
+                    )
                     return
 
         index = self.saved
@@ -291,6 +390,13 @@ class StereoCapture(Node):
             self.signatures.append(signature)
         self.last_saved_stamp_ns = reference_ns
         self.saved += 1
+        self._update_preview(
+            left_gray,
+            right_gray,
+            left_detection,
+            right_detection,
+            'SAVED - MOVE BOARD',
+        )
         if signature is None:
             self.get_logger().info(
                 f'saved raw pair {index:04d}: dt={delta_ms:.3f} ms')
@@ -324,6 +430,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         '--min-novelty', type=float, default=0.025,
         help='minimum normalized pose-signature distance; set 0 to disable duplicate rejection')
+    parser.add_argument('--expected-width', type=int, default=2064)
+    parser.add_argument('--expected-height', type=int, default=1544)
+    parser.add_argument(
+        '--show-window', action='store_true',
+        help='show synchronized vehicle-side video and detected inner corners')
     return parser.parse_args()
 
 
@@ -331,8 +442,17 @@ def main() -> int:
     args = parse_args()
     if args.max_pairs < 1:
         raise SystemExit('--max-pairs must be at least 1')
-    if args.max_delta_ms <= 0 or args.min_interval_sec < 0 or args.min_blur < 0:
-        raise SystemExit('delta/interval/blur arguments must be non-negative (delta > 0)')
+    if (
+        args.max_delta_ms <= 0
+        or args.min_interval_sec < 0
+        or args.min_blur < 0
+        or args.min_novelty < 0
+    ):
+        raise SystemExit(
+            'delta/interval/blur/novelty arguments must be non-negative '
+            '(delta > 0)')
+    if args.expected_width <= 0 or args.expected_height <= 0:
+        raise SystemExit('expected image dimensions must be positive')
     board = load_board(args.board)
 
     rclpy.init()
@@ -341,8 +461,15 @@ def main() -> int:
         node = StereoCapture(args, board)
         while rclpy.ok() and not node.done:
             rclpy.spin_once(node, timeout_sec=0.2)
+            if args.show_window and node.preview is not None:
+                cv2.imshow('ART Stereo Auto Calibration', node.preview)
+                key = cv2.waitKey(1) & 0xFF
+                if key in (27, ord('q')):
+                    node.user_stopped = True
+                    node.done = True
     except KeyboardInterrupt:
-        pass
+        if node is not None:
+            node.user_stopped = True
     finally:
         if node is not None:
             node.close()
@@ -350,8 +477,14 @@ def main() -> int:
             node.destroy_node()
         else:
             saved = 0
+        if args.show_window:
+            cv2.destroyAllWindows()
         rclpy.shutdown()
     print(f'capture complete: {saved} pairs')
+    if node is not None and node.fatal_error:
+        return 3
+    if node is not None and node.user_stopped and saved < args.max_pairs:
+        return 130
     return 0 if saved >= 15 else 2
 
 

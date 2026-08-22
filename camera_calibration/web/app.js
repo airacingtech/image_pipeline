@@ -40,7 +40,19 @@ function progressKey() {
   return `art-cali:poses:${sessionName()}:${app.taskId}`;
 }
 
+function automaticCollection() {
+  const state = app.state;
+  if (!state) return false;
+  return state.selected_task.kind === "mono" ||
+    state.process.label?.endsWith(":auto") ||
+    Boolean(state.session.auto_status);
+}
+
 function completedPoses() {
+  if (automaticCollection()) {
+    const count = Math.min(app.state.session.capture_count, app.state.poses.length);
+    return new Set(app.state.poses.slice(0, count).map((pose) => pose.id));
+  }
   try {
     const parsed = JSON.parse(localStorage.getItem(progressKey()) || "[]");
     return new Set(Array.isArray(parsed) ? parsed : []);
@@ -197,6 +209,10 @@ function renderPreviews() {
 function renderPose() {
   const state = app.state;
   if (!state || !state.poses.length) return;
+  const autoCalibrating = automaticCollection() && state.process.running;
+  if (autoCalibrating) {
+    app.poseIndex = Math.min(state.session.capture_count, state.poses.length - 1);
+  }
   app.poseIndex = Math.max(0, Math.min(app.poseIndex, state.poses.length - 1));
   const pose = state.poses[app.poseIndex];
   const complete = completedPoses();
@@ -210,8 +226,17 @@ function renderPose() {
   elements["pose-board"].style.setProperty("--pose-rotate", `${pose.rotate}deg`);
   elements["pose-prev"].disabled = app.poseIndex === 0;
   elements["pose-next"].disabled = app.poseIndex === state.poses.length - 1;
-  elements["pose-done"].textContent = done ? "✓ 已完成" : "标记完成";
-  elements["pose-done"].className = `button ${done ? "secondary" : "primary"}`;
+  if (automaticCollection()) {
+    elements["pose-done"].textContent = autoCalibrating
+      ? "车端检测成功后自动记录"
+      : "无需手动确认";
+    elements["pose-done"].className = "button secondary";
+    elements["pose-done"].disabled = true;
+  } else {
+    elements["pose-done"].textContent = done ? "✓ 已完成" : "标记完成";
+    elements["pose-done"].className = `button ${done ? "secondary" : "primary"}`;
+    elements["pose-done"].disabled = false;
+  }
   elements["pose-progress"].style.width = `${(complete.size / state.poses.length) * 100}%`;
   elements["pose-progress-copy"].textContent = `已完成 ${complete.size} / ${state.poses.length} 个姿态`;
 
@@ -242,6 +267,10 @@ function currentStage() {
   const accepted = localStorage.getItem(`art-cali:accepted:${sessionName()}:${task.task_id}`) === "true";
   if (accepted) return "review";
   if (session.result || session.mono_archive) return "review";
+  if (session.auto_status === "solving") return "solve";
+  if (process.running && process.label && process.label.endsWith(":auto")) {
+    return session.auto_status === "solving" ? "solve" : "capture";
+  }
   if (process.running && process.label && process.label.endsWith(":calibrate")) return "solve";
   if (session.capture_count > 0 || (process.running && process.label && process.label.endsWith(":capture"))) return "capture";
   if (session.preflight || state.stream_gate.pass) return "preflight";
@@ -286,9 +315,13 @@ function renderControls() {
 
   elements["baseline-field"].hidden = task.kind !== "stereo";
   elements["capture-action"].hidden = task.kind !== "stereo";
-  elements["solve-action"].textContent = task.kind === "stereo" ? "离线求解" : "打开标定器";
+  elements["capture-action"].textContent = "开始车端自动标定";
+  elements["solve-action"].textContent = task.kind === "stereo"
+    ? "仅离线重算"
+    : "开始车端自动标定";
   elements["solve-action"].disabled = app.loadingAction || state.process.running ||
     (task.kind === "stereo" && state.session.capture_count === 0) ||
+    (task.kind === "stereo" && Boolean(state.session.result)) ||
     (task.kind === "mono" && !state.stream_gate.pass);
   elements["preflight-action"].disabled = app.loadingAction || state.process.running;
   elements["capture-action"].disabled = app.loadingAction || state.process.running || !state.stream_gate.pass || state.session.capture_count > 0;
@@ -296,8 +329,10 @@ function renderControls() {
   elements["output-path"].textContent = state.session.base;
   elements["output-path"].title = state.session.base;
   elements["capture-count"].textContent = task.kind === "stereo"
-    ? `${state.session.capture_count} / ${task.target_captures} 对`
-    : (state.session.mono_archive ? `结果 ${state.session.mono_archive.status}` : "等待保存");
+    ? `${state.session.capture_count} / ${task.target_captures} 对 · ${state.session.auto_status || "等待开始"}`
+    : (state.session.mono_archive
+      ? `结果 ${state.session.mono_archive.status}`
+      : `${state.session.capture_count} 个样本 · ${state.session.auto_status || "等待开始"}`);
 
   const process = state.process;
   if (process.running) {
@@ -438,6 +473,10 @@ function changePose(delta) {
 function togglePoseDone() {
   const pose = app.state?.poses[app.poseIndex];
   if (!pose) return;
+  if (automaticCollection()) {
+    showToast("样本由车端自动检测和记录，无需手动确认。", false);
+    return;
+  }
   const complete = completedPoses();
   if (complete.has(pose.id)) complete.delete(pose.id);
   else complete.add(pose.id);
@@ -474,7 +513,7 @@ function bindEvents() {
   elements["pose-next"].addEventListener("click", () => changePose(1));
   elements["pose-done"].addEventListener("click", togglePoseDone);
   elements["preflight-action"].addEventListener("click", () => runAction("preflight"));
-  elements["capture-action"].addEventListener("click", () => runAction("capture"));
+  elements["capture-action"].addEventListener("click", () => runAction("auto"));
   elements["solve-action"].addEventListener("click", () => runAction("calibrate"));
   elements["stop-action"].addEventListener("click", () => runAction("stop"));
   document.addEventListener("keydown", (event) => {

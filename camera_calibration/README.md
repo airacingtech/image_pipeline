@@ -36,9 +36,9 @@ If the browser does not open automatically, visit
 - all five jobs: one center stereo pair plus four monocular fisheye cameras;
 - live raw-image previews and topic, resolution, rate, focus, corner, and
   stereo-synchronization indicators;
-- a fixed 24-pose board-placement guide with per-session progress;
-- guarded preflight, stereo capture, offline solve, monocular calibrator, and
-  process-stop controls;
+- a fixed 24-pose board-placement guide with automatic accepted-sample progress;
+- guarded preflight plus vehicle-side automatic stereo and monocular
+  capture/solve/save workflows and process-stop controls;
 - live process logs and discoverable local artifact paths.
 
 The default is bound to loopback only. A different local output root can be
@@ -74,9 +74,10 @@ on separate workers, so it cannot block ROS image reception or preview updates.
 The UI marks a stream offline only after four seconds without a frame, avoiding
 false disconnect indications during short 2K WebSocket delivery gaps.
 Idle live view uses a local JPEG preview topic to avoid serializing each 3.2 MB
-raw frame through local DDS a second time. The managed relay additionally
-publishes lossless raw topics only while stereo preflight/capture or the
-monocular calibrator is running.
+raw frame through local DDS a second time. Monocular calibration subscribes to
+the native image topic on the vehicle; only its small operator preview crosses
+the bridge. The managed relay publishes lossless raw topics only for stereo
+preflight/capture.
 Preview JPEGs are downscaled to a 960-pixel long edge for responsive display;
 the source dimensions reported by the preflight and every saved raw frame stay
 at `2064 x 1544`.
@@ -111,6 +112,18 @@ ros2 run camera_calibration art_calibration_ui \
 ros2 run camera_calibration art_calibration_ui --direct-ros --open-browser
 ```
 
+Both automatic actions run through SSH on the vehicle and copy the completed
+capture and result artifacts back under the local `--data-root`. No source file
+is edited over SSH. Use key authentication or pass an already authenticated
+ControlMaster socket:
+
+```bash
+ros2 run camera_calibration art_calibration_ui \
+  --vehicle-ssh autera-admin@10.42.27.200 \
+  --ssh-control-path /tmp/art_camera_ssh.sock \
+  --open-browser
+```
+
 ### Web UI SOP
 
 1. Start the required vehicle camera publisher and the local web UI.
@@ -119,20 +132,25 @@ ros2 run camera_calibration art_calibration_ui --direct-ros --open-browser
 3. Select a task and wait for every **开始前检查** row to pass.
 4. Run **预检**. For stereo, review the 10-second report. For monocular jobs,
    the UI checks the active stream immediately.
-5. Follow the 24 indicated board poses. Hold each pose until the whole-board,
-   sharpness, and synchronization/rate chips pass, then mark it complete and
-   move on.
-6. For stereo, select **开始自动采集**. The offline-filtering capture stores up
-   to 60 diverse synchronized pairs locally; then select **离线求解**.
-7. For a fisheye camera, select **打开标定器**, finish the standard ROS
-   coverage bars, choose **CALIBRATE**, inspect the undistorted view, and choose
-   **SAVE**. The UI copies the resulting archive into the current session.
+5. For a monocular job, select **开始车端自动标定** once. Move the board through
+   the indicated positions; a sufficiently different detected pose is recorded
+   automatically and the UI advances. Do not click to confirm each pose.
+6. For stereo, select **开始车端自动标定** once. The vehicle window shows the
+   synchronized pair and detected inner corners. After 60 sharp, synchronized,
+   sufficiently different pairs, it automatically solves, saves, exits, and
+   copies `capture/`, `result/`, and `progress.json` back to `roar`.
+7. For a fisheye camera, wait until coverage is sufficient. The vehicle solves,
+   saves, exits, and copies `calibrationdata.tar.gz` back to the current Roar
+   session without **CALIBRATE** or **SAVE** clicks.
 8. Accept a job only after its report is `PASS` and its rectified or undistorted
    preview is visually correct. Repeat for all five jobs.
 
-Stopping the web server does not erase a session. Reopening the same session
-restores artifact counts; pose checkmarks are stored in that browser profile.
-Use a new session name instead of overwriting a previous capture.
+The standard ROS collector keeps accepted monocular samples in memory until the
+final archive is written. If the vehicle process is interrupted before the UI
+reports `saved`, that fisheye camera starts from zero on retry. Stereo pairs are
+written as they are accepted and are copied back even when the guarded solve
+reports `FAIL`. Completed outputs are never overwritten; use a new session name
+for another run.
 
 ## Center pinhole stereo workflow
 
@@ -145,9 +163,10 @@ This SOP calibrates the following synchronized stereo pair:
 - Capture: `2064 x 1544`, `10 Hz`, GigE Vision `Action0`
 - Model: pinhole intrinsics and a joint left-to-right stereo transform
 
-The vehicle publishes the two raw image streams. The `roar` workstation saves
-synchronized pairs locally. Board detection and calibration run offline, so the
-operator does not need to wait for live corner detection at every pose.
+The vehicle publishes the two raw image streams and runs synchronized capture
+plus offline calibration. The vehicle-side window and the `roar` web UI show
+detected inner corners. Accepted raw pairs and reports are copied to `roar`
+after the automatic command exits.
 
 The standard `cameracalibrator` remains available. The ART wrapper fixes the
 camera model from the vehicle camera name so a fisheye camera cannot
@@ -227,7 +246,42 @@ ros2 topic hz /vimba_calib_left/image
 ros2 topic hz /vimba_calib_right/image
 ```
 
-## 4. Capture 50-60 raw pairs locally
+## 4. Recommended automatic vehicle-side run
+
+The web UI starts this command for the normal one-operator SOP. It opens a
+vehicle-side OpenCV window, draws the 10 x 7 inner corners in both images,
+automatically accepts only sharp, synchronized, novel poses, runs the guarded
+pinhole solve after 60 accepted pairs, saves all artifacts, and exits:
+
+```bash
+SESSION=/home/autera-admin/ART/camera_calibration_sessions/$(date +%Y%m%d_%H%M%S)/stereo_center
+
+ros2 run camera_calibration art_stereo_auto \
+  --output "$SESSION" \
+  --left-topic /vimba_calib_left/image \
+  --right-topic /vimba_calib_right/image \
+  --max-pairs 60 \
+  --expected-width 2064 \
+  --expected-height 1544 \
+  --expected-baseline-m <measured-baseline-in-metres>
+```
+
+Omit `--expected-baseline-m` only when no reliable optical-center measurement
+is available. `q`, Escape, Ctrl-C, or the web UI stop control ends an incomplete
+run without treating it as successful. The automatic session contains:
+
+```text
+$SESSION/progress.json
+$SESSION/capture/
+$SESSION/result/
+```
+
+The `roar` UI copies these paths into
+`<data-root>/<session>/stereo_center/`. Calibration is complete only when
+`result/report.json` is `PASS` and a human has reviewed every rectified preview.
+The automatic workflow never overwrites production CameraInfo.
+
+## 5. Manual capture/re-solve fallback
 
 Create a new session name. The capture tool refuses to write into a non-empty
 session directory:
@@ -239,10 +293,13 @@ ros2 run camera_calibration art_stereo_capture \
   --output "$SESSION" \
   --left-topic /vimba_calib_left/image \
   --right-topic /vimba_calib_right/image \
-  --mode interval \
+  --mode online-filter \
   --max-pairs 60 \
   --max-delta-ms 2.0 \
-  --min-interval-sec 1.0
+  --min-interval-sec 1.0 \
+  --expected-width 2064 \
+  --expected-height 1544 \
+  --show-window
 ```
 
 Use two people when possible:
@@ -275,7 +332,7 @@ sed -n '1,200p' "$SESSION/capture_summary.json"
 
 The left and right counts must match.
 
-## 5. Run offline calibration
+## 6. Run offline calibration
 
 Measure the physical optical-center baseline if a reliable measurement is
 available. Then run:
@@ -303,7 +360,7 @@ The offline stage:
 4. fits both intrinsics and the left-to-right stereo transform;
 5. rectifies representative pairs and writes an acceptance report.
 
-## 6. Completion criteria
+## 7. Completion criteria
 
 Calibration is complete only when `$RESULT/report.json` reports `PASS` and the
 rectified preview images show corresponding target points on the same horizontal
@@ -332,7 +389,7 @@ $RESULT/right_camera_info.yaml
 $RESULT/rectified_previews/
 ```
 
-## 7. Deployment rule
+## 8. Deployment rule
 
 Do not automatically overwrite production CameraInfo files. Before deployment:
 
@@ -345,13 +402,13 @@ Do not automatically overwrite production CameraInfo files. Before deployment:
 7. deploy the generated CameraInfo files through the normal reviewed vehicle
    configuration process.
 
-## 8. Four monocular fisheye cameras
+## 9. Four monocular fisheye cameras
 
 Calibrate `vimba_front`, `vimba_left`, `vimba_right`, and `vimba_rear` one at a
 time. The vehicle must publish the selected raw image topic at `2064 x 1544`;
 do not calibrate from a compressed or reduced-resolution topic.
 
-On the `roar` workstation, first inspect the resolved command:
+On the vehicle, first inspect the resolved command:
 
 ```bash
 CAMERA=vimba_front
@@ -360,11 +417,26 @@ ros2 run camera_calibration art_camera_calibrator "$CAMERA" \
   --print-command
 ```
 
-Then start the interactive calibration:
+For a one-operator, vehicle-side run, use automatic mode. The OpenCV window is
+shown on the vehicle desktop and displays the live image, detected corners, and
+coverage bars:
 
 ```bash
-ros2 run camera_calibration art_camera_calibrator "$CAMERA"
+SESSION=/home/autera-admin/ART/camera_calibration_sessions/$(date +%Y%m%d_%H%M%S)/$CAMERA
+mkdir -p "$SESSION"
+
+ros2 run camera_calibration art_camera_calibrator "$CAMERA" \
+  --auto-save "$SESSION/calibrationdata.tar.gz" \
+  --auto-progress "$SESSION/progress.json" \
+  --auto-exit
 ```
+
+The node subscribes directly to the vehicle ROS image topic. It starts
+collecting immediately, accepts only poses sufficiently different from the
+existing dataset, and automatically solves and saves when all coverage bars are
+complete or 40 samples have been accepted. No **CALIBRATE** or **SAVE** click is
+required. `progress.json` reports the accepted sample count and current state.
+The ART wrapper also rejects any input that is not exactly `2064 x 1544`.
 
 The wrapper fixes the physical target to **7 x 10 inner corners** with a
 `0.0700 m` square. This is the same 11 x 8-square board used by the stereo
@@ -375,11 +447,11 @@ workflow, rotated by 90 degrees. It also fixes these OpenCV fisheye options:
 - `CALIB_FIX_SKEW`.
 
 Collect sharp views across the center, four corners, four edges, multiple
-distances, and positive/negative yaw, pitch, and roll. After the GUI reports
-adequate coverage, select **CALIBRATE**, inspect the undistorted preview, then
-select **SAVE**. The saved archive is `/tmp/calibrationdata.tar.gz`; copy it to
-a camera-specific result path immediately because the next session overwrites
-that filename.
+distances, and positive/negative yaw, pitch, and roll. In automatic mode the
+accepted images remain in memory until the final archive is written; stopping
+the process before `status: saved` means that camera must be collected again.
+Copy the completed vehicle-side archive to the `roar` session directory before
+starting the next camera.
 
 For every monocular result, extract and review `ost.yaml`. Acceptance requires:
 

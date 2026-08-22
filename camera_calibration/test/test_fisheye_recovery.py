@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import json
 from unittest import mock
 
 from camera_calibration.calibrator import (
@@ -177,3 +178,29 @@ def test_calibration_worker_reports_failure_and_resets_running_state():
     assert node._calibration_running is False
     assert len(node.c.good_corners) == 1
     logger.error.assert_called_once()
+
+
+def test_calibration_worker_automatically_saves_progress(tmp_path):
+    node = object.__new__(OpenCVCalibrationNode)
+    node.c = mock.Mock()
+    node.c.db = [object(), object()]
+    node.c.goodenough = True
+    node.c.calibrated = True
+    node._calibration_running = True
+    node._auto_save_path = str(tmp_path / 'calibrationdata.tar.gz')
+    node._auto_progress_path = str(tmp_path / 'progress.json')
+    node._auto_exit = False
+    node._auto_phase = 'calibrating'
+    node._last_auto_progress = None
+    logger = mock.Mock()
+    node.get_logger = mock.Mock(return_value=logger)
+
+    node._run_calibration()
+
+    node.c.do_save.assert_called_once_with(node._auto_save_path)
+    progress = json.loads((tmp_path / 'progress.json').read_text())
+    assert progress['status'] == 'saved'
+    assert progress['samples'] == 2
+    assert progress['goodenough'] is True
+    assert node._calibration_running is False
+    logger.info.assert_called_once()

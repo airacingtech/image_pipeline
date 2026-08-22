@@ -22,6 +22,8 @@ def test_four_surround_cameras_use_fisheye(camera_name):
     assert f'image:=/{camera_name}/image' in arguments
     assert arguments[arguments.index('--size') + 1] == '7x10'
     assert arguments[arguments.index('--square') + 1] == '0.0700'
+    assert arguments[arguments.index('--expected-width') + 1] == '2064'
+    assert arguments[arguments.index('--expected-height') + 1] == '1544'
 
 
 @pytest.mark.parametrize('camera_name', sorted(PINHOLE_STEREO_CAMERAS))
@@ -38,6 +40,30 @@ def test_custom_image_topic_is_preserved():
         'vimba_front', '/vimba_calib_front/image')
 
     assert 'image:=/vimba_calib_front/image' in arguments
+
+
+def test_vehicle_headless_auto_mode_is_forwarded_before_ros_args(tmp_path):
+    archive = tmp_path / 'calibrationdata.tar.gz'
+    progress = tmp_path / 'progress.json'
+
+    arguments = build_cameracalibrator_args(
+        'vimba_front',
+        auto_save=str(archive),
+        auto_progress=str(progress),
+        auto_exit=True,
+        headless=True,
+    )
+
+    ros_args_index = arguments.index('--ros-args')
+    assert arguments[arguments.index('--auto-save') + 1] == str(archive)
+    assert arguments[arguments.index('--auto-progress') + 1] == str(progress)
+    assert arguments.index('--auto-exit') < ros_args_index
+    assert arguments.index('--headless') < ros_args_index
+
+
+def test_headless_mode_requires_auto_save():
+    with pytest.raises(SystemExit, match='require --auto-save'):
+        main(['vimba_front', '--headless'])
 
 
 def test_relative_image_topic_is_rejected():

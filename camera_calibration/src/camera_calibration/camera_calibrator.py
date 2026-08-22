@@ -30,16 +30,25 @@
 # ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
+import json
+import os
+import threading
+import time
+try:
+    from queue import Queue
+except ImportError:
+    from Queue import Queue
+
 import cv2
 import message_filters
 import numpy
-import os
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_system_default
+from rclpy.qos import QoSProfile
 import sensor_msgs.msg
 import sensor_msgs.srv
-import threading
-import time
+
 from camera_calibration.calibrator import (
     CalibrationException,
     CAMERA_MODEL,
@@ -47,12 +56,6 @@ from camera_calibration.calibrator import (
     Patterns,
     StereoCalibrator,
 )
-try:
-    from queue import Queue
-except ImportError:
-    from Queue import Queue
-from rclpy.qos import qos_profile_system_default
-from rclpy.qos import QoSProfile
 
 
 class BufferQueue(Queue):
@@ -100,7 +103,7 @@ class CalibrationNode(Node):
     def __init__(self, name, boards, service_check = True, synchronizer = message_filters.TimeSynchronizer, flags = 0,
                  fisheye_flags = 0, pattern=Patterns.Chessboard, camera_name='', checkerboard_flags = 0,
                  max_chessboard_speed = -1, queue_size = 1,
-                 camera_model=CAMERA_MODEL.PINHOLE):
+                 camera_model=CAMERA_MODEL.PINHOLE, expected_size=None):
         super().__init__(name)
 
         self.set_camera_info_service = self.create_client(sensor_msgs.srv.SetCameraInfo, "camera/set_camera_info")
@@ -129,6 +132,8 @@ class CalibrationNode(Node):
         self._pattern = pattern
         self._camera_name = camera_name
         self._camera_model = camera_model
+        self._expected_size = expected_size
+        self._fatal_error = None
         self._max_chessboard_speed = max_chessboard_speed
         lsub = message_filters.Subscriber(self, sensor_msgs.msg.Image, 'left', qos_profile=self.get_topic_qos("left"))
         rsub = message_filters.Subscriber(self, sensor_msgs.msg.Image, 'right', qos_profile=self.get_topic_qos("right"))
@@ -165,6 +170,13 @@ class CalibrationNode(Node):
         self.q_stereo.put((lmsg, rmsg))
 
     def handle_monocular(self, msg):
+        if self._expected_size and (msg.width, msg.height) != self._expected_size:
+            self._fatal_error = (
+                'Image size is %dx%d; expected %dx%d. Calibration aborted.' % (
+                    msg.width, msg.height, *self._expected_size))
+            self.get_logger().error(self._fatal_error)
+            rclpy.shutdown()
+            return
         if self.c == None:
             if self._camera_name:
                 self.c = MonoCalibrator(self._boards, self._calib_flags, self._fisheye_calib_flags, self._pattern, name=self._camera_name,
@@ -182,6 +194,18 @@ class CalibrationNode(Node):
         self.redraw_monocular(drawable)
 
     def handle_stereo(self, msg):
+        if self._expected_size:
+            lmsg, rmsg = msg
+            if (
+                (lmsg.width, lmsg.height) != self._expected_size
+                or (rmsg.width, rmsg.height) != self._expected_size
+            ):
+                self._fatal_error = (
+                    'Stereo image size does not match expected %dx%d. '
+                    'Calibration aborted.' % self._expected_size)
+                self.get_logger().error(self._fatal_error)
+                rclpy.shutdown()
+                return
         if self.c == None:
             if self._camera_name:
                 self.c = StereoCalibrator(self._boards, self._calib_flags, self._fisheye_calib_flags, self._pattern, name=self._camera_name,
@@ -264,13 +288,24 @@ class OpenCVCalibrationNode(CalibrationNode):
 
     def __init__(self, *args, **kwargs):
 
+        self._auto_save_path = kwargs.pop('auto_save_path', None)
+        self._auto_progress_path = kwargs.pop('auto_progress_path', None)
+        self._auto_exit = kwargs.pop('auto_exit', False)
+        self._headless = kwargs.pop('headless', False)
+
         CalibrationNode.__init__(self, *args, **kwargs)
 
         self.queue_display = BufferQueue(maxsize=1)
         self._calibration_running = False
-        self.initWindow()
+        self._auto_phase = 'collecting'
+        self._last_auto_progress = None
+        if not self._headless:
+            self.initWindow()
 
     def spin(self):
+        if self._headless:
+            rclpy.spin(self)
+            return
         sth = SpinThread(self)
         sth.start()
 
@@ -323,12 +358,75 @@ class OpenCVCalibrationNode(CalibrationNode):
                         rclpy.shutdown()
 
     def _run_calibration(self):
+        auto_succeeded = False
+        auto_failed = False
+        auto_save_path = getattr(self, '_auto_save_path', None)
         try:
             self.c.do_calibration()
+            if auto_save_path:
+                output = os.path.abspath(os.path.expanduser(auto_save_path))
+                os.makedirs(os.path.dirname(output), exist_ok=True)
+                self.c.do_save(output)
+                self._auto_phase = 'saved'
+                auto_succeeded = True
+                self.get_logger().info(
+                    'Automatic calibration saved to %s' % output)
         except (CalibrationException, cv2.error) as exc:
+            self._auto_phase = 'failed'
+            auto_failed = bool(auto_save_path)
+            if auto_failed:
+                self._fatal_error = 'Automatic calibration failed: %s' % exc
             self.get_logger().error("Calibration failed: %s" % exc)
         finally:
             self._calibration_running = False
+            self._write_auto_progress()
+            if auto_failed or (
+                auto_succeeded and getattr(self, '_auto_exit', False)
+            ):
+                rclpy.shutdown()
+
+    def _write_auto_progress(self):
+        progress_path = getattr(self, '_auto_progress_path', None)
+        if not progress_path or self.c is None:
+            return
+        payload = {
+            'status': self._auto_phase,
+            'samples': len(self.c.db),
+            'goodenough': bool(self.c.goodenough),
+            'calibrated': bool(self.c.calibrated),
+            'archive': getattr(self, '_auto_save_path', None),
+        }
+        if payload == getattr(self, '_last_auto_progress', None):
+            return
+        output = os.path.abspath(os.path.expanduser(progress_path))
+        os.makedirs(os.path.dirname(output), exist_ok=True)
+        temporary = output + '.tmp'
+        with open(temporary, 'w', encoding='utf-8') as stream:
+            json.dump(payload, stream, indent=2, sort_keys=True)
+            stream.write('\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, output)
+        self._last_auto_progress = payload
+
+    def _maybe_auto_calibrate(self):
+        if not getattr(self, '_auto_save_path', None) or self.c is None:
+            return
+        self._write_auto_progress()
+        if (
+            self.c.goodenough
+            and not self.c.calibrated
+            and not self._calibration_running
+        ):
+            print('**** Coverage complete; calibrating and saving automatically ****')
+            self._auto_phase = 'calibrating'
+            self._calibration_running = True
+            self._write_auto_progress()
+            threading.Thread(
+                target=self._run_calibration,
+                name='AutomaticCalibration',
+                daemon=True,
+            ).start()
 
     def on_scale(self, scalevalue):
         if self.c and self.c.calibrated:
@@ -363,6 +461,9 @@ class OpenCVCalibrationNode(CalibrationNode):
         print("Saved screen dump to /tmp/dump%d.png" % i)
 
     def redraw_monocular(self, drawable):
+        self._maybe_auto_calibrate()
+        if self._headless:
+            return
         height = drawable.scrib.shape[0]
         width = drawable.scrib.shape[1]
 
@@ -398,6 +499,9 @@ class OpenCVCalibrationNode(CalibrationNode):
         self.queue_display.put(display)
 
     def redraw_stereo(self, drawable):
+        self._maybe_auto_calibrate()
+        if self._headless:
+            return
         height = drawable.lscrib.shape[0]
         width = drawable.lscrib.shape[1]
 

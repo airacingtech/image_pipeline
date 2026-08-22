@@ -3,13 +3,15 @@ from __future__ import annotations
 from http.server import ThreadingHTTPServer
 import io
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import tarfile
 import threading
 from urllib.request import urlopen
 
 from camera_calibration.nodes.art_calibration_ui import (
     build_action_command,
+    build_vehicle_mono_command,
+    build_vehicle_stereo_auto_command,
     CalibrationApp,
     EXPECTED_HEIGHT,
     EXPECTED_WIDTH,
@@ -17,13 +19,14 @@ from camera_calibration.nodes.art_calibration_ui import (
     mono_archive_summary,
     PREVIEW_TOPICS,
     RELAY_CAMERA_BY_TASK,
-    StreamMonitor,
     stream_gate,
     STREAM_TOPICS,
+    StreamMonitor,
     task_for,
     task_paths,
     TASKS,
     validate_session_name,
+    vehicle_task_paths,
 )
 import cv2
 import numpy as np
@@ -112,6 +115,61 @@ def test_mono_command_preserves_camera_model_wrapper_and_topic(tmp_path):
     assert command == [
         'ros2', 'run', 'camera_calibration', 'art_camera_calibrator',
         'vimba_rear', '--image-topic', '/vimba_rear/image']
+
+
+def test_mono_vehicle_command_runs_auto_calibration_with_visible_gui():
+    task = task_for('vimba_front')
+    remote_paths = vehicle_task_paths(
+        PurePosixPath('/home/autera-admin/ART/camera_calibration_sessions'),
+        'session',
+        task,
+    )
+
+    command = build_vehicle_mono_command(
+        task,
+        remote_paths,
+        'autera-admin@10.42.27.200',
+        '/tmp/art-camera.sock',
+    )
+    rendered = ' '.join(command)
+
+    assert command[:2] == ['ssh', '-tt']
+    assert '-S' in command
+    assert 'art_camera_calibrator vimba_front' in rendered
+    assert '--auto-save' in rendered
+    assert '--auto-progress' in rendered
+    assert '--auto-exit' in rendered
+    assert '--headless' not in rendered
+    assert 'DISPLAY=${DISPLAY:-:0}' in rendered
+    assert 'test ! -e' in rendered
+
+
+def test_stereo_vehicle_command_runs_visible_auto_capture_and_solve():
+    task = task_for('stereo_center')
+    remote_paths = vehicle_task_paths(
+        PurePosixPath('/home/autera-admin/ART/camera_calibration_sessions'),
+        'session',
+        task,
+    )
+
+    command = build_vehicle_stereo_auto_command(
+        task,
+        remote_paths,
+        'autera-admin@10.42.27.200',
+        0.3,
+        '/tmp/art-camera.sock',
+    )
+    rendered = ' '.join(command)
+
+    assert command[:2] == ['ssh', '-tt']
+    assert 'art_stereo_auto' in rendered
+    assert '--max-pairs 60' in rendered
+    assert '--expected-width 2064' in rendered
+    assert '--expected-height 1544' in rendered
+    assert '--expected-baseline-m 0.3' in rendered
+    assert '--headless' not in rendered
+    assert 'DISPLAY=${DISPLAY:-:0}' in rendered
+    assert 'test ! -e' in rendered
 
 
 def test_stream_gate_checks_size_rate_and_stereo_sync():
