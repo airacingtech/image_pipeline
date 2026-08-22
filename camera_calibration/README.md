@@ -55,11 +55,12 @@ building the package, copy the five `.desktop` files to
 `/home/autera-admin/Desktop/` and mark them executable/trusted. No web server is
 required.
 
-For the center pair, set the independently measured optical-center baseline
-before double-clicking when it is available:
+For the center pair, an independently measured optical-center baseline can be
+required when running the same desktop script from a terminal:
 
 ```bash
-export ART_STEREO_BASELINE_M=<measured-baseline-in-metres>
+ART_STEREO_BASELINE_M=<measured-baseline-in-metres> \
+  /home/autera-admin/ART/image_pipeline/camera_calibration/scripts/art_calibrate_center_stereo.sh
 ```
 
 If it is omitted, the stereo solve still checks that the fitted baseline is

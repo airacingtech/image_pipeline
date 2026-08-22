@@ -50,3 +50,7 @@ ros2 run camera_calibration art_camera_calibrator "${CAMERA}" \
   --auto-save "${SESSION}/calibrationdata.tar.gz" \
   --auto-progress "${SESSION}/progress.json" \
   --auto-exit
+test -s "${SESSION}/calibrationdata.tar.gz" || {
+  printf '任务退出，但没有生成 calibrationdata.tar.gz；本次不算标定成功。\n' >&2
+  exit 4
+}

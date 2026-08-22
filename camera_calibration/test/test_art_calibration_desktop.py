@@ -27,6 +27,7 @@ def test_four_fisheye_scripts_are_independent_and_syntax_valid():
         assert '--auto-save' in text
         assert '--auto-progress' in text
         assert '--auto-exit' in text
+        assert 'test -s "${SESSION}/calibrationdata.tar.gz"' in text
         assert 'ros2 launch' not in text
 
 
