@@ -32,6 +32,7 @@
 
 import json
 import os
+import re
 import threading
 import time
 try:
@@ -298,6 +299,7 @@ class OpenCVCalibrationNode(CalibrationNode):
         self._auto_progress_path = kwargs.pop('auto_progress_path', None)
         self._auto_exit = kwargs.pop('auto_exit', False)
         self._headless = kwargs.pop('headless', False)
+        self._operator_finish = kwargs.pop('operator_finish', False)
 
         CalibrationNode.__init__(self, *args, **kwargs)
 
@@ -309,6 +311,9 @@ class OpenCVCalibrationNode(CalibrationNode):
         self._calibration_running = False
         self._auto_phase = 'collecting'
         self._last_auto_progress = None
+        self._persisted_samples = 0
+        self._active_sample_ids = []
+        self._opencv_rejections = []
         if not self._headless:
             self.initWindow()
 
@@ -328,6 +333,8 @@ class OpenCVCalibrationNode(CalibrationNode):
             k = cv2.waitKey(6) & 0xFF
             if k in [27, ord('q')]:
                 return
+            elif k == ord('c'):
+                self._request_calibration()
             elif k == ord('s') and self.image is not None:
                 self.screendump(self.image)
 
@@ -346,17 +353,9 @@ class OpenCVCalibrationNode(CalibrationNode):
 
     def on_mouse(self, event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN and self.displaywidth < x:
-            if self.c.goodenough:
+            if self._calibration_ready():
                 if 180 <= y < 280:
-                    print("**** Calibrating ****")
-                    # Perform calibration in another thread to prevent UI blocking
-                    if not self._calibration_running:
-                        self.c.calibrated = False
-                        self.c.reprojection_error = None
-                        self._calibration_running = True
-                        threading.Thread(
-                            target=self._run_calibration, name="Calibration"
-                        ).start()
+                    self._request_calibration()
                     self.buttons(self._last_display)
                     self.queue_display.put(self._last_display)
             if self.c.calibrated:
@@ -367,12 +366,71 @@ class OpenCVCalibrationNode(CalibrationNode):
                     if self.do_upload():
                         rclpy.shutdown()
 
+    def _calibration_ready(self):
+        if self.c is None or self._calibration_running or self.c.calibrated:
+            return False
+        if self._operator_finish:
+            return bool(self.c.good_corners)
+        return bool(self.c.goodenough)
+
+    def _request_calibration(self):
+        if not self._calibration_ready():
+            return False
+        print("**** Operator requested OpenCV calibration ****")
+        self.c.calibrated = False
+        self.c.reprojection_error = None
+        self._auto_phase = 'calibrating'
+        self._calibration_running = True
+        self._write_auto_progress()
+        threading.Thread(
+            target=self._run_calibration, name="Calibration"
+        ).start()
+        return True
+
+    def _calibrate_with_opencv_rejections(self):
+        while True:
+            try:
+                self.c.do_calibration()
+                return
+            except CalibrationException as exc:
+                match = re.search(r'input array (\d+)', str(exc))
+                if (
+                    self.c.camera_model != CAMERA_MODEL.FISHEYE
+                    or 'CALIB_CHECK_COND' not in str(exc)
+                    or match is None
+                ):
+                    raise
+                position = int(match.group(1))
+                if not 0 <= position < len(self.c.db):
+                    raise
+                original_id = (
+                    self._active_sample_ids.pop(position)
+                    if position < len(self._active_sample_ids)
+                    else position + 1
+                )
+                self.c.db.pop(position)
+                self.c.good_corners.pop(position)
+                rejection = {
+                    'original_sample_index_one_based': original_id,
+                    'opencv_input_position_zero_based': position,
+                    'reason': 'OpenCV CALIB_CHECK_COND rejected this input view',
+                    'opencv_error': str(exc),
+                }
+                self._opencv_rejections.append(rejection)
+                self._write_opencv_rejections()
+                self.get_logger().warning(
+                    'OpenCV rejected ill-conditioned sample %d; retrying with %d views'
+                    % (original_id, len(self.c.db)))
+                if not self.c.db:
+                    raise CalibrationException(
+                        'OpenCV rejected every captured view') from exc
+
     def _run_calibration(self):
         auto_succeeded = False
         auto_failed = False
         auto_save_path = getattr(self, '_auto_save_path', None)
         try:
-            self.c.do_calibration()
+            self._calibrate_with_opencv_rejections()
             if auto_save_path:
                 output = os.path.abspath(os.path.expanduser(auto_save_path))
                 os.makedirs(os.path.dirname(output), exist_ok=True)
@@ -384,16 +442,88 @@ class OpenCVCalibrationNode(CalibrationNode):
         except (CalibrationException, cv2.error) as exc:
             self._auto_phase = 'failed'
             auto_failed = bool(auto_save_path)
-            if auto_failed:
+            if auto_failed and not getattr(self, '_operator_finish', False):
                 self._fatal_error = 'Automatic calibration failed: %s' % exc
             self.get_logger().error("Calibration failed: %s" % exc)
         finally:
             self._calibration_running = False
             self._write_auto_progress()
-            if auto_failed or (
+            if (auto_failed and not getattr(self, '_operator_finish', False)) or (
                 auto_succeeded and getattr(self, '_auto_exit', False)
             ):
                 rclpy.shutdown()
+
+    def _write_opencv_rejections(self):
+        auto_save_path = getattr(self, '_auto_save_path', None)
+        if not auto_save_path:
+            return
+        output = os.path.join(
+            os.path.dirname(os.path.abspath(os.path.expanduser(auto_save_path))),
+            'opencv_rejections.json',
+        )
+        self._write_json_atomic(output, self._opencv_rejections)
+
+    @staticmethod
+    def _write_json_atomic(output, payload):
+        os.makedirs(os.path.dirname(output), exist_ok=True)
+        temporary = output + '.tmp'
+        with open(temporary, 'w', encoding='utf-8') as stream:
+            json.dump(payload, stream, indent=2, sort_keys=True)
+            stream.write('\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, output)
+
+    def _persist_accepted_samples(self):
+        auto_save_path = getattr(self, '_auto_save_path', None)
+        if not auto_save_path or self.c is None or not self.c.is_mono:
+            return
+        if self._persisted_samples >= len(self.c.db):
+            return
+        root = os.path.join(
+            os.path.dirname(os.path.abspath(os.path.expanduser(auto_save_path))),
+            'accepted_samples',
+        )
+        os.makedirs(root, exist_ok=True)
+        manifest = []
+        manifest_path = os.path.join(root, 'manifest.json')
+        if os.path.isfile(manifest_path):
+            with open(manifest_path, encoding='utf-8') as stream:
+                manifest = json.load(stream)
+        while self._persisted_samples < len(self.c.db):
+            position = self._persisted_samples
+            params, gray = self.c.db[position]
+            corners, ids, board = self.c.good_corners[position]
+            sample_id = position + 1
+            image_name = 'frame_%04d.png' % sample_id
+            corners_name = 'frame_%04d.npz' % sample_id
+            image_temporary = os.path.join(root, '.' + image_name + '.tmp.png')
+            if not cv2.imwrite(image_temporary, gray):
+                raise OSError('failed to persist accepted sample image')
+            os.replace(image_temporary, os.path.join(root, image_name))
+            corners_temporary = os.path.join(root, '.' + corners_name + '.tmp.npz')
+            numpy.savez_compressed(
+                corners_temporary,
+                corners=numpy.asarray(corners),
+                ids=(numpy.asarray(ids) if ids is not None
+                     else numpy.empty((0,), dtype=numpy.int32)),
+                params=numpy.asarray(params, dtype=numpy.float64),
+            )
+            os.replace(corners_temporary, os.path.join(root, corners_name))
+            manifest.append({
+                'index': sample_id,
+                'image': image_name,
+                'corners': corners_name,
+                'params': [float(value) for value in params],
+                'board': {
+                    'columns': int(board.n_cols),
+                    'rows': int(board.n_rows),
+                    'square_m': float(board.dim),
+                },
+            })
+            self._active_sample_ids.append(sample_id)
+            self._persisted_samples += 1
+        self._write_json_atomic(manifest_path, manifest)
 
     def _write_auto_progress(self):
         progress_path = getattr(self, '_auto_progress_path', None)
@@ -405,6 +535,9 @@ class OpenCVCalibrationNode(CalibrationNode):
             'goodenough': bool(self.c.goodenough),
             'calibrated': bool(self.c.calibrated),
             'archive': getattr(self, '_auto_save_path', None),
+            'operator_finish': bool(getattr(self, '_operator_finish', False)),
+            'opencv_rejected_samples': len(
+                getattr(self, '_opencv_rejections', [])),
         }
         if payload == getattr(self, '_last_auto_progress', None):
             return
@@ -423,6 +556,8 @@ class OpenCVCalibrationNode(CalibrationNode):
         if not getattr(self, '_auto_save_path', None) or self.c is None:
             return
         self._write_auto_progress()
+        if self._operator_finish:
+            return
         if (
             self.c.goodenough
             and not self.c.calibrated
@@ -455,7 +590,7 @@ class OpenCVCalibrationNode(CalibrationNode):
 
     def buttons(self, display):
         x = self.displaywidth
-        self.button(display[180:280,x:x+100], "CALIBRATE", self.c.goodenough)
+        self.button(display[180:280,x:x+100], "CALIBRATE", self._calibration_ready())
         self.button(display[280:380,x:x+100], "SAVE", self.c.calibrated)
         self.button(display[380:480,x:x+100], "COMMIT", self.c.calibrated)
 
@@ -471,6 +606,13 @@ class OpenCVCalibrationNode(CalibrationNode):
         print("Saved screen dump to /tmp/dump%d.png" % i)
 
     def redraw_monocular(self, drawable):
+        try:
+            self._persist_accepted_samples()
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            self._fatal_error = 'Failed to persist accepted sample: %s' % exc
+            self.get_logger().error(self._fatal_error)
+            rclpy.shutdown()
+            return
         self._maybe_auto_calibrate()
         if self._headless:
             return

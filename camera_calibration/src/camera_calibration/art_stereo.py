@@ -124,18 +124,42 @@ def _detect_checkerboard(gray: np.ndarray, spec: BoardSpec, fast: bool) -> Optio
     corners = None
     found = False
 
-    # During online capture, detect at half resolution and refine on the original image.
+    # During online capture, use the sector-based detector at half resolution
+    # and refine on the original image.  The ART target has rounded outer
+    # cells; the classic FAST_CHECK path rejects clear views of this board.
     if fast and min(gray.shape[:2]) >= 700:
         small = cv2.resize(gray, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
-        found, small_corners = cv2.findChessboardCorners(
-            small,
-            board_size,
-            cv2.CALIB_CB_ADAPTIVE_THRESH
-            | cv2.CALIB_CB_NORMALIZE_IMAGE
-            | cv2.CALIB_CB_FAST_CHECK,
-        )
+        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+        candidates = (small, cv2.equalizeHist(small), clahe.apply(small))
+        small_corners = None
+        has_sector_detector = hasattr(cv2, 'findChessboardCornersSB')
+        if has_sector_detector:
+            for candidate in candidates:
+                found, small_corners = cv2.findChessboardCornersSB(
+                    candidate,
+                    board_size,
+                    flags=cv2.CALIB_CB_NORMALIZE_IMAGE,
+                )
+                if found:
+                    break
+        if not found and not has_sector_detector:
+            for candidate in candidates:
+                found, small_corners = cv2.findChessboardCorners(
+                    candidate,
+                    board_size,
+                    cv2.CALIB_CB_ADAPTIVE_THRESH
+                    | cv2.CALIB_CB_NORMALIZE_IMAGE,
+                )
+                if found:
+                    break
         if found:
             corners = small_corners * 2.0
+
+        # Do not fall through to the multi-second full-resolution detector in
+        # the live callback.  The offline path below retains that exhaustive
+        # behavior for saved images.
+        if not found:
+            return None
 
     if not found and not fast and hasattr(cv2, 'findChessboardCornersSB'):
         flags = cv2.CALIB_CB_NORMALIZE_IMAGE

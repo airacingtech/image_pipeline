@@ -248,6 +248,69 @@ def test_calibration_worker_reports_failure_and_resets_running_state():
     logger.error.assert_called_once()
 
 
+def test_operator_finish_allows_calibration_without_coverage_gate():
+    node = object.__new__(OpenCVCalibrationNode)
+    node.c = mock.Mock()
+    node.c.good_corners = [object()]
+    node.c.goodenough = False
+    node.c.calibrated = False
+    node._calibration_running = False
+    node._operator_finish = True
+
+    assert node._calibration_ready() is True
+
+
+def test_opencv_condition_rejection_is_recorded_and_removed():
+    node = object.__new__(OpenCVCalibrationNode)
+    node.c = mock.Mock()
+    node.c.camera_model = CAMERA_MODEL.FISHEYE
+    node.c.db = ['one', 'two', 'three']
+    node.c.good_corners = ['one', 'two', 'three']
+    node.c.do_calibration.side_effect = [
+        CalibrationException(
+            'CALIB_CHECK_COND - Ill-conditioned matrix for input array 1'),
+        None,
+    ]
+    node._active_sample_ids = [1, 2, 3]
+    node._opencv_rejections = []
+    node._auto_save_path = None
+    logger = mock.Mock()
+    node.get_logger = mock.Mock(return_value=logger)
+
+    node._calibrate_with_opencv_rejections()
+
+    assert node.c.db == ['one', 'three']
+    assert node.c.good_corners == ['one', 'three']
+    assert node._active_sample_ids == [1, 3]
+    assert node._opencv_rejections[0][
+        'original_sample_index_one_based'] == 2
+    assert node.c.do_calibration.call_count == 2
+    logger.warning.assert_called_once()
+
+
+def test_accepted_mono_samples_are_persisted_before_calibration(tmp_path):
+    node = object.__new__(OpenCVCalibrationNode)
+    board = ChessboardInfo('chessboard', 10, 7, 0.07)
+    gray = numpy.zeros((20, 30), dtype=numpy.uint8)
+    corners = numpy.zeros((70, 1, 2), dtype=numpy.float32)
+    node.c = mock.Mock()
+    node.c.is_mono = True
+    node.c.db = [([0.1, 0.2, 0.3, 0.4], gray)]
+    node.c.good_corners = [(corners, None, board)]
+    node._auto_save_path = str(tmp_path / 'calibrationdata.tar.gz')
+    node._persisted_samples = 0
+    node._active_sample_ids = []
+
+    node._persist_accepted_samples()
+
+    accepted = tmp_path / 'accepted_samples'
+    assert (accepted / 'frame_0001.png').is_file()
+    assert (accepted / 'frame_0001.npz').is_file()
+    manifest = json.loads((accepted / 'manifest.json').read_text())
+    assert manifest[0]['index'] == 1
+    assert node._active_sample_ids == [1]
+
+
 def test_calibration_worker_automatically_saves_progress(tmp_path):
     node = object.__new__(OpenCVCalibrationNode)
     node.c = mock.Mock()

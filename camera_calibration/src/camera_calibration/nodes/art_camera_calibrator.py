@@ -45,9 +45,13 @@ def build_cameracalibrator_args(
         raise ValueError('--image-topic must be an absolute ROS topic')
 
     arguments = ['--camera-model', model]
-    # ART automatic collection must be driven by complete pose coverage, not
-    # the upstream fallback that declares any 40 accepted samples sufficient.
-    arguments.append('--require-full-coverage')
+    if headless:
+        arguments.append('--require-full-coverage')
+    else:
+        # OpenCV does not define fixed X/Y/size/skew coverage percentages or a
+        # required image count.  The vehicle operator ends physical capture,
+        # then presses C (or CALIBRATE) to request the guarded OpenCV solve.
+        arguments.append('--operator-finish')
     if model == 'fisheye':
         arguments.extend([
             '--fisheye-recompute-extrinsics',

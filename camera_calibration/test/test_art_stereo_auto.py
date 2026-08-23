@@ -72,6 +72,15 @@ def test_auto_capture_command_enforces_2k_and_visible_vehicle_window(tmp_path):
     assert '--show-window' in command
 
 
+def test_operator_finished_capture_has_no_fixed_pair_limit(tmp_path):
+    args = art_stereo_auto.parse_args([
+        '--output', str(tmp_path / 'session'), '--max-pairs', '0'])
+
+    command = art_stereo_auto.build_capture_command(args, tmp_path / 'capture')
+
+    assert command[command.index('--max-pairs') + 1] == '0'
+
+
 def test_auto_pipeline_rejects_success_without_pass_report(tmp_path):
     output = tmp_path / 'session'
 

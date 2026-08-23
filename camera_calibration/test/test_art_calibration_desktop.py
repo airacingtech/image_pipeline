@@ -39,7 +39,7 @@ def test_stereo_script_is_independent_and_syntax_valid():
     assert 'ART_STEREO_LEFT_TOPIC:-/vimba_front_left_center/image' in text
     assert 'ART_STEREO_RIGHT_TOPIC:-/vimba_front_right_center/image' in text
     assert 'art_stereo_auto' in text
-    assert '--max-pairs 60' in text
+    assert '--max-pairs 0' in text
     assert '--expected-width 2064' in text
     assert '--expected-height 1544' in text
     assert 'ros2 launch' not in text

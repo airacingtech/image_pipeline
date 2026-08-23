@@ -50,7 +50,7 @@ arguments=(
   --output "${SESSION}"
   --left-topic "${LEFT_TOPIC}"
   --right-topic "${RIGHT_TOPIC}"
-  --max-pairs 60
+  --max-pairs 0
   --expected-width 2064
   --expected-height 1544
 )

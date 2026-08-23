@@ -35,13 +35,12 @@ workspace, checks that its required topic already has a publisher, and then
 starts only that calibration task. The launcher never starts, restarts, or
 wakes a Vimba publisher. Start the normal vehicle camera system first.
 
-The OpenCV window shows the live image and detected checkerboard corners. A
-fisheye task automatically solves, writes `calibrationdata.tar.gz`, and exits
-only after all four pose-coverage bars are complete and OpenCV solves
-successfully. The ART entry points do not use the upstream 40-sample shortcut.
-The stereo task accepts 60 synchronized distinct pairs, runs the guarded joint
-solve, writes `result/report.json`, and exits. Closing the window, pressing `q`
-or Escape, or pressing Ctrl-C stops only the selected task.
+The OpenCV window shows the live image and detected checkerboard corners. Poses
+are accepted automatically, but neither an image count nor an X/Y/size/skew bar
+is a completion gate. After reaching the physical coverage limits, put the
+board down and press **C** (or click **CALIBRATE**) to hand the saved data to
+OpenCV. A successful solve writes the result and exits. Closing the window,
+pressing `q` or Escape, or pressing Ctrl-C stops only the selected task.
 
 Every double-click creates a new result directory, so a previous session is
 never overwritten:
@@ -197,21 +196,19 @@ ros2 run camera_calibration art_calibration_ui \
    the indicated positions; a sufficiently different detected pose is recorded
    automatically and the UI advances. Do not click to confirm each pose.
 6. For stereo, select **开始车端自动标定** once. The vehicle window shows the
-   synchronized pair and detected inner corners. After 60 sharp, synchronized,
-   sufficiently different pairs, it automatically solves, saves, exits, and
-   copies `capture/`, `result/`, and `progress.json` back to `roar`.
-7. For a fisheye camera, wait until coverage is sufficient. The vehicle solves,
-   saves, exits, and copies `calibrationdata.tar.gz` back to the current Roar
-   session without **CALIBRATE** or **SAVE** clicks.
+   synchronized pair and detected inner corners. After reaching the physical
+   coverage limits, press **C** once to run the guarded joint OpenCV solve.
+7. For a fisheye camera, reach the physical coverage limits and press **C** (or
+   click **CALIBRATE**) once. OpenCV solves, saves, exits, and copies
+   `calibrationdata.tar.gz` back to the current Roar session.
 8. Accept a job only after its report is `PASS` and its rectified or undistorted
    preview is visually correct. Repeat for all five jobs.
 
-The standard ROS collector keeps accepted monocular samples in memory until the
-final archive is written. If the vehicle process is interrupted before the UI
-reports `saved`, that fisheye camera starts from zero on retry. Stereo pairs are
-written as they are accepted and are copied back even when the guarded solve
-reports `FAIL`. Completed outputs are never overwritten; use a new session name
-for another run.
+Both monocular samples and stereo pairs are written to the session directory as
+they are accepted. A failed OpenCV solve therefore retains the dataset for an
+audited offline retry. Fisheye views explicitly rejected by
+`CALIB_CHECK_COND` are recorded in `opencv_rejections.json`. Completed outputs
+are never overwritten; use a new session name for another run.
 
 ## Center pinhole stereo workflow
 
@@ -311,8 +308,9 @@ ros2 topic hz /vimba_calib_right/image
 
 The web UI starts this command for the normal one-operator SOP. It opens a
 vehicle-side OpenCV window, draws the 10 x 7 inner corners in both images,
-automatically accepts only sharp, synchronized, novel poses, runs the guarded
-pinhole solve after 60 accepted pairs, saves all artifacts, and exits:
+automatically accepts only sharp, synchronized, novel poses. The operator
+presses **C** after physical coverage is complete; this runs the guarded pinhole
+solve, saves all artifacts, and exits:
 
 ```bash
 SESSION=/home/autera-admin/ART/camera_calibration_sessions/$(date +%Y%m%d_%H%M%S)/stereo_center
@@ -321,15 +319,16 @@ ros2 run camera_calibration art_stereo_auto \
   --output "$SESSION" \
   --left-topic /vimba_calib_left/image \
   --right-topic /vimba_calib_right/image \
-  --max-pairs 60 \
+  --max-pairs 0 \
   --expected-width 2064 \
   --expected-height 1544 \
   --expected-baseline-m <measured-baseline-in-metres>
 ```
 
-Omit `--expected-baseline-m` only when no reliable optical-center measurement
-is available. `q`, Escape, Ctrl-C, or the web UI stop control ends an incomplete
-run without treating it as successful. The automatic session contains:
+`--max-pairs 0` means that no pair count declares capture complete. Omit
+`--expected-baseline-m` only when no reliable optical-center measurement is
+available. `q`, Escape, Ctrl-C, or the web UI stop control ends an incomplete
+run without treating it as successful. The session contains:
 
 ```text
 $SESSION/progress.json
@@ -355,7 +354,7 @@ ros2 run camera_calibration art_stereo_capture \
   --left-topic /vimba_calib_left/image \
   --right-topic /vimba_calib_right/image \
   --mode online-filter \
-  --max-pairs 60 \
+  --max-pairs 0 \
   --max-delta-ms 2.0 \
   --min-interval-sec 1.0 \
   --expected-width 2064 \
@@ -381,7 +380,9 @@ Hold each pose for about `1.5-2 seconds`. Collect the following coverage:
 
 Keep the complete checkerboard visible in both cameras. Avoid repeated poses,
 motion blur, strong glare, shadows across the board, or a board that occupies
-only a small central area. The target is **50-60 raw pairs**, not 120.
+only a small central area. About **50-60 varied pairs** is a practical guide,
+not a completion trigger; press **C** when the rig's physical coverage has been
+reached.
 
 After capture, verify the local dataset:
 
@@ -478,9 +479,8 @@ ros2 run camera_calibration art_camera_calibrator "$CAMERA" \
   --print-command
 ```
 
-For a one-operator, vehicle-side run, use automatic mode. The OpenCV window is
-shown on the vehicle desktop and displays the live image, detected corners, and
-coverage bars:
+For a one-operator, vehicle-side run, use the vehicle wrapper. The OpenCV window
+shows the live image, detected corners, and advisory coverage bars:
 
 ```bash
 SESSION=/home/autera-admin/ART/camera_calibration_sessions/$(date +%Y%m%d_%H%M%S)/$CAMERA
@@ -493,13 +493,12 @@ ros2 run camera_calibration art_camera_calibrator "$CAMERA" \
 ```
 
 The node subscribes directly to the vehicle ROS image topic. It starts
-collecting immediately, accepts only poses sufficiently different from the
-existing dataset, and automatically starts OpenCV calibration only after all
-four pose-coverage bars are complete. ART entry points disable the upstream
-40-sample shortcut: an image count alone never declares collection complete.
-The run is complete only after OpenCV solves successfully and the archive is
-saved. No **CALIBRATE** or **SAVE** click is required. `progress.json` reports
-the accepted sample count and current state.
+collecting immediately and accepts only poses sufficiently different from the
+existing dataset. ART GUI entry points use neither the upstream 40-sample
+shortcut nor full X/Y/size/skew bars as completion gates. After reaching the
+rig's physical limits, press **C** (or click **CALIBRATE**) once. The run is
+complete only after OpenCV solves successfully and the archive is saved.
+`progress.json` reports the accepted sample count and current state.
 The ART wrapper also rejects any input that is not exactly `2064 x 1544`.
 For this rounded-edge physical board, the wrapper disables OpenCV's
 `CALIB_CB_FAST_CHECK` because it can falsely reject clear detections after the
@@ -514,12 +513,12 @@ workflow, rotated by 90 degrees. It also fixes these OpenCV fisheye options:
 - `CALIB_CHECK_COND`;
 - `CALIB_FIX_SKEW`.
 
-Collect sharp views across the center, four corners, four edges, multiple
-distances, and positive/negative yaw, pitch, and roll. In automatic mode the
-accepted images remain in memory until the final archive is written; stopping
-the process before `status: saved` means that camera must be collected again.
-Copy the completed vehicle-side archive to the `roar` session directory before
-starting the next camera.
+Collect sharp views across the center, reachable edges, multiple distances, and
+positive/negative yaw, pitch, and roll. Every accepted image and its detected
+corners are immediately persisted under `accepted_samples/`. OpenCV
+`CALIB_CHECK_COND` rejections are recorded rather than hidden. Copy the
+completed vehicle-side archive to the `roar` session directory before starting
+the next camera.
 
 For every monocular result, extract and review `ost.yaml`. Acceptance requires:
 

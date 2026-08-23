@@ -107,8 +107,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument('--expected-baseline-m', type=float)
     args = parser.parse_args(argv)
 
-    if args.max_pairs < 15:
-        parser.error('--max-pairs must be at least 15')
+    if args.max_pairs < 0 or 0 < args.max_pairs < 15:
+        parser.error('--max-pairs must be 0 (operator-finished) or at least 15')
     if args.max_delta_ms <= 0:
         parser.error('--max-delta-ms must be positive')
     if args.min_interval_sec < 0 or args.min_blur < 0 or args.min_novelty < 0:

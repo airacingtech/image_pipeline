@@ -164,6 +164,7 @@ class StereoCapture(Node):
         self.done = False
         self.fatal_error: str | None = None
         self.user_stopped = False
+        self.operator_finished = False
         self.preview: np.ndarray | None = None
         self.preview_status = 'Waiting for synchronized images'
 
@@ -204,7 +205,10 @@ class StereoCapture(Node):
             'status': (
                 'failed' if self.fatal_error
                 else 'stopped' if self.user_stopped
-                else 'complete' if self.saved >= self.args.max_pairs
+                else 'complete' if (
+                    self.operator_finished
+                    or (self.args.max_pairs > 0 and self.saved >= self.args.max_pairs)
+                )
                 else 'incomplete'),
             'error': self.fatal_error,
         }
@@ -254,9 +258,13 @@ class StereoCapture(Node):
             views.append(view)
         canvas = np.hstack(views)
         cv2.rectangle(canvas, (0, 0), (canvas.shape[1], 42), (0, 0, 0), -1)
+        count_text = (
+            f'{self.saved}/{self.args.max_pairs}'
+            if self.args.max_pairs > 0 else str(self.saved)
+        )
         cv2.putText(
             canvas,
-            f'Accepted {self.saved}/{self.args.max_pairs} | {status}',
+            f'Accepted {count_text} | {status} | C=SOLVE',
             (14, 29),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.75,
@@ -336,12 +344,18 @@ class StereoCapture(Node):
             right_detection = detect_board(right_gray, self.board, fast=True)
             if left_detection is None or right_detection is None:
                 self.counters['board_not_in_both'] += 1
+                if left_detection is None and right_detection is None:
+                    status = 'BOARD INCOMPLETE IN LEFT + RIGHT'
+                elif left_detection is None:
+                    status = 'BOARD INCOMPLETE IN LEFT'
+                else:
+                    status = 'BOARD INCOMPLETE IN RIGHT'
                 self._update_preview(
                     left_gray,
                     right_gray,
                     left_detection,
                     right_detection,
-                    'BOARD MUST BE VISIBLE IN BOTH',
+                    status,
                 )
                 return
 
@@ -405,7 +419,7 @@ class StereoCapture(Node):
                 f'saved filtered pair {index:04d}: dt={delta_ms:.3f} ms, '
                 f'blur=({left_blur:.0f},{right_blur:.0f}), '
                 f'center=({signature[0]:.2f},{signature[1]:.2f})')
-        if self.saved >= self.args.max_pairs:
+        if self.args.max_pairs > 0 and self.saved >= self.args.max_pairs:
             self.done = True
 
 
@@ -422,7 +436,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--right-topic', default='/vimba_calib_right/image')
     parser.add_argument(
         '--mode', choices=('interval', 'online-filter'), default='interval',
-        help='interval saves without board detection; online-filter runs the legacy live detector')
+        help='interval saves raw pairs; online-filter runs the robust live detector')
     parser.add_argument('--max-pairs', type=int, default=60)
     parser.add_argument('--max-delta-ms', type=float, default=2.0)
     parser.add_argument('--min-interval-sec', type=float, default=1.0)
@@ -440,8 +454,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    if args.max_pairs < 1:
-        raise SystemExit('--max-pairs must be at least 1')
+    if args.max_pairs < 0:
+        raise SystemExit('--max-pairs must be non-negative; 0 means operator-finished')
     if (
         args.max_delta_ms <= 0
         or args.min_interval_sec < 0
@@ -467,6 +481,12 @@ def main() -> int:
                 if key in (27, ord('q')):
                     node.user_stopped = True
                     node.done = True
+                elif key == ord('c'):
+                    if node.saved > 0:
+                        node.operator_finished = True
+                        node.done = True
+                    else:
+                        node.preview_status = 'NO ACCEPTED PAIRS YET'
     except KeyboardInterrupt:
         if node is not None:
             node.user_stopped = True
@@ -483,9 +503,13 @@ def main() -> int:
     print(f'capture complete: {saved} pairs')
     if node is not None and node.fatal_error:
         return 3
-    if node is not None and node.user_stopped and saved < args.max_pairs:
+    if node is not None and node.user_stopped:
         return 130
-    return 0 if saved >= 15 else 2
+    if node is not None and node.operator_finished:
+        return 0
+    if args.max_pairs > 0 and saved >= args.max_pairs:
+        return 0
+    return 0 if saved > 0 else 2
 
 
 if __name__ == '__main__':

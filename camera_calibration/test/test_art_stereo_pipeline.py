@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import unittest
+from unittest import mock
 
 from camera_calibration.art_stereo import detect_board, Detection, load_board
 from camera_calibration.nodes import art_stereo_calibrate as calibration
@@ -38,6 +39,31 @@ class BoardTest(unittest.TestCase):
         detection = detect_board(image, board, fast=False)
         self.assertIsNotNone(detection)
         self.assertEqual(detection.image_points.shape, (70, 2))
+
+    def test_fast_detector_uses_small_sector_based_fallback(self):
+        board = load_board(BOARD_CONFIG)
+        image = np.zeros((1544, 2064), dtype=np.uint8)
+        corners = (
+            np.mgrid[0:10, 0:7].T.reshape(-1, 1, 2).astype(np.float32)
+            * 20.0
+            + 20.0
+        )
+        with (
+            mock.patch(
+                'camera_calibration.art_stereo.cv2.findChessboardCornersSB',
+                return_value=(True, corners),
+            ) as find_sb,
+            mock.patch(
+                'camera_calibration.art_stereo.cv2.findChessboardCorners',
+            ) as find_classic,
+            mock.patch('camera_calibration.art_stereo.cv2.cornerSubPix'),
+        ):
+            detection = detect_board(image, board, fast=True)
+
+        self.assertIsNotNone(detection)
+        self.assertEqual(detection.image_points.shape, (70, 2))
+        find_sb.assert_called_once()
+        find_classic.assert_not_called()
 
 
 class SyntheticStereoTest(unittest.TestCase):

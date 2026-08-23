@@ -145,6 +145,9 @@ def main():
         "--require-full-coverage", action="store_true", default=False,
         help="require every pose-coverage dimension; disable the 40-sample shortcut")
     group.add_option(
+        "--operator-finish", action="store_true", default=False,
+        help="do not use coverage/count completion gates; press C or CALIBRATE to run OpenCV")
+    group.add_option(
         "--auto-progress", type="string", default=None, metavar="JSON",
         help="atomically write automatic collection progress to this JSON file")
     group.add_option(
@@ -164,6 +167,10 @@ def main():
 
     if (options.auto_progress or options.auto_exit or options.headless) and not options.auto_save:
         parser.error("--auto-progress, --auto-exit, and --headless require --auto-save")
+    if options.operator_finish and not options.auto_save:
+        parser.error("--operator-finish requires --auto-save")
+    if options.operator_finish and options.headless:
+        parser.error("--operator-finish requires the OpenCV window")
     if (options.expected_width is None) != (options.expected_height is None):
         parser.error("--expected-width and --expected-height must be used together")
     expected_size = None
@@ -268,6 +275,7 @@ def main():
                                  headless=options.headless,
                                  expected_size=expected_size,
                                  require_full_coverage=options.require_full_coverage,
+                                 operator_finish=options.operator_finish,
                                  camera_model=(CAMERA_MODEL.FISHEYE if options.camera_model == "fisheye"
                                                else CAMERA_MODEL.PINHOLE))
     node.spin()

@@ -25,7 +25,8 @@ def test_four_surround_cameras_use_fisheye(camera_name):
     assert arguments[arguments.index('--expected-width') + 1] == '2064'
     assert arguments[arguments.index('--expected-height') + 1] == '1544'
     assert '--disable_calib_cb_fast_check' in arguments
-    assert '--require-full-coverage' in arguments
+    assert '--operator-finish' in arguments
+    assert '--require-full-coverage' not in arguments
 
 
 @pytest.mark.parametrize('camera_name', sorted(PINHOLE_STEREO_CAMERAS))
@@ -61,6 +62,8 @@ def test_vehicle_headless_auto_mode_is_forwarded_before_ros_args(tmp_path):
     assert arguments[arguments.index('--auto-progress') + 1] == str(progress)
     assert arguments.index('--auto-exit') < ros_args_index
     assert arguments.index('--headless') < ros_args_index
+    assert '--require-full-coverage' in arguments
+    assert '--operator-finish' not in arguments
 
 
 def test_headless_mode_requires_auto_save():
